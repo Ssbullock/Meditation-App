@@ -1,0 +1,13 @@
+[
+  {
+    "id": "1736312263576",
+    "createdAt": "2025-01-08T04:57:43.576Z",
+    "goals": "",
+    "styles": [
+      "Breathwork"
+    ],
+    "duration": "3",
+    "script": "Welcome to this brief breathwork meditation. Let's start by finding a comfortable seated position. Gently close your eyes, and allow your hands to rest softly on your knees or in your lap. {{PAUSE_15s}}\n\nBegin by taking a deep breath in through your nose, feeling your chest and belly expand. Now, exhale slowly through your mouth, letting all the tension melt away. {{PAUSE_8s}}\n\nWith each breath, imagine a wave of relaxation washing over you. Inhale, allowing peace to fill your body. Exhale, releasing any stress or worries. {{PAUSE_8s}}\n\nNow, let's deepen our breaths. Inhale slowly to the count of four... one, two, three, four. Hold your breath for a moment. {{PAUSE_3s}} And exhale gently to the count of four... one, two, three, four. {{PAUSE_15s}}\n\nContinue this breathing pattern. With each inhale, draw in calmness. With each exhale, release what no longer serves you. {{PAUSE_8s}}\n\nAs we come to the end of this meditation, take a moment to thank yourself for taking this time to breathe and be present. {{PAUSE_8s}}\n\nWhen you're ready, gently wiggle your fingers and toes, bringing awareness back to your body. Open your eyes, returning to the space around you, feeling refreshed and centered. Thank you for joining this breathwork meditation.",
+    "audioUrl": "/audio/merged-1736312255478.mp3"
+  }
+]

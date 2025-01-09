@@ -1,0 +1,22 @@
+# Node modules
+node_modules/
+
+# Environment variables
+.env
+
+# User uploaded content
+public/user-music/*
+!public/user-music/.gitkeep
+
+# Keep default music in version control
+!public/music/*
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# IDE specific files
+.vscode/
+.idea/
+.DS_Store 
