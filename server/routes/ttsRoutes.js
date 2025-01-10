@@ -96,12 +96,18 @@ function parsePlaceholders(script) {
  */
 router.post('/generate-audio', async (req, res) => {
   try {
-    const { script, voice = 'alloy', model = 'tts-1' } = req.body;
-    if (!script) {
-      return res.status(400).json({ error: 'No script provided' });
+    const { text, voice = 'alloy', model = 'tts-1' } = req.body;
+    if (!text) {
+      return res.status(400).json({ error: 'No text provided' });
     }
 
-    const blocks = parsePlaceholders(script);
+    console.log('Starting TTS generation with:', {
+      textLength: text.length,
+      voice,
+      model
+    });
+
+    const blocks = parsePlaceholders(text);
     const chunkFiles = [];
     
     // Process each block sequentially
@@ -109,17 +115,29 @@ router.post('/generate-audio', async (req, res) => {
       const block = blocks[i];
       try {
         if (block.text) {
-          console.log(`Processing text chunk ${i}:`, block.text.slice(0, 50) + '...');
+          console.log(`Processing text chunk ${i + 1}/${blocks.length}:`, block.text.slice(0, 50) + '...');
+          
+          // Validate text length for OpenAI API
+          if (block.text.length > 4096) {
+            throw new Error('Text chunk exceeds maximum length of 4096 characters');
+          }
+
           const mp3Response = await openai.audio.speech.create({
             model,
             voice,
             input: block.text,
           });
+
+          if (!mp3Response) {
+            throw new Error('No response from OpenAI TTS API');
+          }
+
           const buffer = Buffer.from(await mp3Response.arrayBuffer());
           const outFile = `chunk-${Date.now()}-${i}.mp3`;
           const outPath = path.join(tempDir, outFile);
           await fs.promises.writeFile(outPath, buffer);
           chunkFiles.push(outPath);
+          console.log(`Successfully processed chunk ${i + 1}`);
         }
         
         if (block.pause > 0) {
@@ -136,7 +154,7 @@ router.post('/generate-audio', async (req, res) => {
             fs.unlinkSync(file);
           }
         }
-        throw error;
+        throw new Error(`Failed to process text chunk ${i + 1}: ${error.message}`);
       }
     }
 
@@ -166,8 +184,9 @@ router.post('/generate-audio', async (req, res) => {
   } catch (error) {
     console.error('Error generating TTS audio:', error);
     return res.status(500).json({ 
-      error: 'Failed to generate audio.',
-      details: error.message 
+      error: 'Failed to generate audio',
+      details: error.message,
+      step: error.step || 'unknown'
     });
   }
 });

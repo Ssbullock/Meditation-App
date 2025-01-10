@@ -128,9 +128,17 @@ function CreateMeditation() {
         text: generatedScript,
         voice: selectedVoice
       });
+
+      if (!res.data || !res.data.audioUrl) {
+        throw new Error('Invalid response from TTS service');
+      }
+
       setTtsAudioUrl(res.data.audioUrl);
+      console.log('TTS generation successful');
     } catch (error) {
       console.error('Error generating TTS:', error);
+      const errorMessage = error.response?.data?.details || error.message || 'Failed to generate audio';
+      alert(`Error generating audio: ${errorMessage}`);
     } finally {
       setLoadingTTS(false);
     }
