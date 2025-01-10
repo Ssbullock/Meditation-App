@@ -30,6 +30,10 @@ function CreateMeditation() {
   const [duration, setDuration] = useState(10);
   const [selectedStyles, setSelectedStyles] = useState([]);
   const [goals, setGoals] = useState('');
+  const [topic, setTopic] = useState('');
+  const [style, setStyle] = useState('');
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
 
   // Script from AI
   const [generatedScript, setGeneratedScript] = useState('');
@@ -200,6 +204,56 @@ function CreateMeditation() {
     <div style={styles.pageBackground}>
       <div style={styles.container}>
         <h1 style={styles.header}>Create Custom Meditation</h1>
+
+        {/* Title */}
+        <div style={styles.section}>
+          <h2 style={styles.sectionTitle}>Title</h2>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            style={styles.input}
+            placeholder="Enter meditation title"
+          />
+        </div>
+
+        {/* Description */}
+        <div style={styles.section}>
+          <h2 style={styles.sectionTitle}>Description</h2>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            style={styles.textArea}
+            placeholder="Enter meditation description"
+          />
+        </div>
+
+        {/* Topic */}
+        <div style={styles.section}>
+          <h2 style={styles.sectionTitle}>Topic</h2>
+          <input
+            type="text"
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            style={styles.input}
+            placeholder="Enter meditation topic"
+          />
+        </div>
+
+        {/* Style */}
+        <div style={styles.section}>
+          <h2 style={styles.sectionTitle}>Style</h2>
+          <select
+            value={style}
+            onChange={(e) => setStyle(e.target.value)}
+            style={styles.input}
+          >
+            <option value="">Select a style</option>
+            {AVAILABLE_STYLES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </div>
 
         {/* Duration */}
         <div style={styles.section}>
