@@ -5,7 +5,7 @@ import '../styles/Navbar.css';
 import logo from '../assets/logo.png';
 
 function Navbar() {
-  const { user, login, logout } = useAuth();
+  const { user, loginWithGoogle, logout } = useAuth();
 
   return (
     <nav style={styles.nav}>
@@ -26,7 +26,7 @@ function Navbar() {
             <button onClick={logout} className="nav-button">Logout</button>
           </div>
         ) : (
-          <button onClick={login} className="nav-button">Sign in with Google</button>
+          <button onClick={loginWithGoogle} className="nav-button">Sign in with Google</button>
         )}
       </div>
     </nav>

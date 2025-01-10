@@ -2,7 +2,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Navigate } from 'react-router-dom';
 
 function LandingPage() {
-  const { user, login } = useAuth();
+  const { user, loginWithGoogle } = useAuth();
 
   if (user) {
     return <Navigate to="/dashboard" />;
@@ -13,7 +13,7 @@ function LandingPage() {
       <div style={styles.content}>
         <h1 style={styles.title}>Welcome to Meditation App</h1>
         <p style={styles.subtitle}>Create and manage your personal meditations</p>
-        <button onClick={login} style={styles.loginButton}>
+        <button onClick={loginWithGoogle} style={styles.loginButton}>
           Sign in with Google
         </button>
       </div>
