@@ -16,6 +16,7 @@ import ttsRoutes from './routes/ttsRoutes.js';
 // (Optional) musicRoutes if you allow uploading background tracks
 import musicRoutes from './routes/musicRoutes.js';
 import fileUpload from 'express-fileupload';
+import MongoStore from 'connect-mongo';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,6 +44,10 @@ app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  store: MongoStore.create({
+    mongoUrl: process.env.MONGODB_URI,
+    ttl: 24 * 60 * 60 // Session TTL in seconds
+  }),
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     maxAge: 24 * 60 * 60 * 1000 // 24 hours

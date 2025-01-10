@@ -5,6 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import Music from '../models/Music.js';
 import { requireAuth } from '../middleware/auth.js';
+import mongoose from 'mongoose';
 
 const router = Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -12,15 +13,22 @@ const __dirname = path.dirname(__filename);
 
 // Initialize default music from public/music folder
 const initializeDefaultMusic = async () => {
-  const musicDir = path.join(__dirname, '../public/music');
-  
-  // Create music directory if it doesn't exist
-  if (!fs.existsSync(musicDir)) {
-    fs.mkdirSync(musicDir, { recursive: true });
-    return;
-  }
-
   try {
+    // Wait for MongoDB connection to be established
+    if (mongoose.connection.readyState !== 1) {
+      console.log('Waiting for MongoDB connection...');
+      setTimeout(initializeDefaultMusic, 5000);
+      return;
+    }
+
+    const musicDir = path.join(__dirname, '../public/music');
+    
+    if (!fs.existsSync(musicDir)) {
+      fs.mkdirSync(musicDir, { recursive: true });
+      console.log('Created music directory');
+      return;
+    }
+
     // Read all files from the music directory
     const files = fs.readdirSync(musicDir);
     
@@ -43,6 +51,7 @@ const initializeDefaultMusic = async () => {
     }
   } catch (error) {
     console.error('Error initializing default music:', error);
+    // Don't exit the process, just log the error
   }
 };
 
