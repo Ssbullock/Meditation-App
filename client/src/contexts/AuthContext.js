@@ -1,6 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
-import axios from 'axios';
 import { jwtDecode } from "jwt-decode";
+import api from '../utils/api';
 
 const AuthContext = createContext(null);
 
@@ -14,7 +14,6 @@ export const AuthProvider = ({ children }) => {
       try {
         const decoded = jwtDecode(token);
         setUser(decoded);
-        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       } catch (error) {
         console.error('Invalid token:', error);
         localStorage.removeItem('token');
