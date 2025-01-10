@@ -147,7 +147,7 @@ function CreateMeditation() {
   // 3) Merge TTS + selected music
   const handleMergeWithMusic = async () => {
     if (!ttsAudioUrl || !selectedMusic) {
-      alert('Need TTS audio and a selected music track');
+      alert('Please generate TTS audio and select a music track first');
       return;
     }
     setLoadingMerge(true);
@@ -155,11 +155,18 @@ function CreateMeditation() {
       const res = await api.post('/api/tts/mix-with-music', {
         ttsUrl: ttsAudioUrl,
         musicUrl: selectedMusic,
-        musicVolume: parseFloat(musicVolume)
+        musicVolume: parseFloat(musicVolume),
+        ttsVolume: parseFloat(ttsVolume)
       });
+      
+      if (!res.data || !res.data.mergedAudioUrl) {
+        throw new Error('Invalid response from merge service');
+      }
+      
       setMergedAudioUrl(res.data.mergedAudioUrl);
     } catch (error) {
       console.error('Error mixing audio:', error);
+      alert('Failed to merge audio: ' + (error.response?.data?.error || error.message));
     } finally {
       setLoadingMerge(false);
     }
@@ -167,37 +174,74 @@ function CreateMeditation() {
 
   // 4) Save the final meditation
   const handleSaveMeditation = async () => {
+    // Validate required fields
+    if (!goals) {
+      alert('Please enter your meditation goals');
+      return;
+    }
+    if (selectedStyles.length === 0) {
+      alert('Please select at least one meditation style');
+      return;
+    }
+    if (!duration) {
+      alert('Please set a duration');
+      return;
+    }
+    if (!generatedScript) {
+      alert('Please generate a meditation script');
+      return;
+    }
+    if (!mergedAudioUrl && !ttsAudioUrl) {
+      alert('Please generate audio for your meditation');
+      return;
+    }
+
     try {
       const response = await api.post('/api/meditations/save', {
         title: `Meditation (${new Date().toLocaleDateString()})`,
-        description: goals,
-        audioUrl: mergedAudioUrl,
-        script: generatedScript,
+        goals: goals,
+        styles: selectedStyles,
         duration: parseInt(duration),
-        styles: selectedStyles
+        script: generatedScript,
+        audioUrl: mergedAudioUrl || ttsAudioUrl
       });
-      navigate('/dashboard');
+
+      if (response.data && response.data.meditation) {
+        navigate('/dashboard');
+      } else {
+        throw new Error('Invalid response from server');
+      }
     } catch (error) {
       console.error('Error saving meditation:', error);
+      alert('Failed to save meditation: ' + (error.response?.data?.details || error.message));
     }
   };
 
   // Add this new function
   const handleMusicUpload = async (event) => {
     const file = event.target.files[0];
+    if (!file) return;
+
+    setUploadingMusic(true);
     const formData = new FormData();
     formData.append('music', file);
     formData.append('name', file.name);
 
     try {
-      const response = await api.post('/api/music/upload', formData, {
+      await api.post('/api/music/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
       });
-      // Handle success
+      // Refresh music list after successful upload
+      fetchMusicList();
+      // Reset file input
+      event.target.value = '';
     } catch (error) {
       console.error('Error uploading music:', error);
+      alert('Failed to upload music file');
+    } finally {
+      setUploadingMusic(false);
     }
   };
 
