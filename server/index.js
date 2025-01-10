@@ -25,7 +25,10 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 app.use(cors({
-  origin: 'http://localhost:3000',
+  origin: [
+    'http://localhost:3000',
+    'https://custom-meditations.netlify.app' // Replace with your actual Netlify domain
+  ],
   credentials: true
 }));
 app.use(express.json());
@@ -61,7 +64,7 @@ app.use(passport.session());
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: "http://localhost:5001/auth/google/callback"
+  callbackURL: "https://meditation-app-6wyw.onrender.com/auth/google/callback"
 }, async (accessToken, refreshToken, profile, done) => {
   try {
     let user = await User.findOne({ googleId: profile.id });
