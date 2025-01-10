@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '../utils/api';
 
 function MusicSelector({ onMusicSelect, selectedMusic }) {
   const [musicList, setMusicList] = useState({ default: [], user: [] });
@@ -13,7 +13,7 @@ function MusicSelector({ onMusicSelect, selectedMusic }) {
   const fetchMusicList = async () => {
     try {
       setLoading(true);
-      const response = await axios.get('http://localhost:5001/api/music');
+      const response = await api.get('/api/music');
       const defaultMusic = response.data.filter(m => m.isDefault);
       const userMusic = response.data.filter(m => !m.isDefault);
       setMusicList({ default: defaultMusic, user: userMusic });
@@ -34,7 +34,7 @@ function MusicSelector({ onMusicSelect, selectedMusic }) {
     formData.append('name', file.name);
 
     try {
-      await axios.post('http://localhost:5001/api/music/upload', formData, {
+      await api.post('/api/music/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },

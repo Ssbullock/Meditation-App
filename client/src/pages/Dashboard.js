@@ -1,6 +1,6 @@
 // client/src/pages/Dashboard.js
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from '../utils/api';
 import { Link } from 'react-router-dom';
 import '../styles/Dashboard.css';
 
@@ -20,7 +20,7 @@ function Dashboard() {
 
   const fetchMeditations = async () => {
     try {
-      const res = await axios.get('http://localhost:5001/api/meditations');
+      const res = await api.get('/api/meditations');
       setSavedMeditations(res.data); // adjust if your route returns an array
     } catch (error) {
       console.error('Error fetching meditations:', error);
@@ -29,7 +29,7 @@ function Dashboard() {
 
   const fetchMusicFiles = async () => {
     try {
-      const res = await axios.get('http://localhost:5001/api/music');
+      const res = await api.get('/api/music');
       setMusicFiles(res.data); // array of { name, url }
     } catch (error) {
       console.error('Error fetching music files:', error);
@@ -42,7 +42,7 @@ function Dashboard() {
 
   const handleDeleteMusic = async (filename) => {
     try {
-      await axios.delete(`http://localhost:5001/api/music/${filename}`);
+      await api.delete(`/api/music/${filename}`);
       // Refresh the music list
       fetchMusicFiles();
     } catch (error) {
@@ -53,7 +53,7 @@ function Dashboard() {
 
   const handleDeleteMeditation = async (id) => {
     try {
-      await axios.delete(`http://localhost:5001/api/meditations/${id}`);
+      await api.delete(`/api/meditations/${id}`);
       // Refresh the meditations list
       fetchMeditations();
     } catch (error) {
@@ -116,7 +116,7 @@ function Dashboard() {
                 {med.audioUrl && (
                   <audio
                     controls
-                    src={`http://localhost:5001${med.audioUrl}`}
+                    src={`${process.env.REACT_APP_API_URL}${med.audioUrl}`}
                     style={styles.audioPlayer}
                   />
                 )}
@@ -141,7 +141,7 @@ function Dashboard() {
                 </div>
                 <audio
                   controls
-                  src={`http://localhost:5001${file.url}`}
+                  src={`${process.env.REACT_APP_API_URL}${file.url}`}
                   style={styles.audioPlayer}
                 />
               </div>

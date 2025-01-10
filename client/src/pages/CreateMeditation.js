@@ -1,6 +1,6 @@
 // client/src/pages/CreateMeditation.js
 import React, { useState, useEffect, useRef } from 'react';
-import axios from 'axios';
+import api from '../utils/api';
 import '../styles/animations.css';
 import { useNavigate } from 'react-router-dom';
 
@@ -83,10 +83,10 @@ function CreateMeditation() {
 
   const fetchMusicList = async () => {
     try {
-      const res = await axios.get('http://localhost:5001/api/music');
+      const res = await api.get('/api/music');
       setMusicOptions(res.data);
-    } catch (err) {
-      console.error('Error fetching music list:', err);
+    } catch (error) {
+      console.error('Error fetching music:', error);
     }
   };
 
@@ -105,15 +105,14 @@ function CreateMeditation() {
   const handleGenerateScript = async () => {
     setLoadingScript(true);
     try {
-      const res = await axios.post('http://localhost:5001/api/meditations/generate', {
-        duration,
-        style: selectedStyles.join(', '),
-        extraNotes: `User's goals: ${goals}`,
+      const res = await api.post('/api/meditations/generate', {
+        topic,
+        duration: parseInt(duration),
+        style
       });
       setGeneratedScript(res.data.script);
     } catch (error) {
-      console.error(error);
-      alert('Error generating script');
+      console.error('Error generating script:', error);
     } finally {
       setLoadingScript(false);
     }
@@ -127,15 +126,13 @@ function CreateMeditation() {
     }
     setLoadingTTS(true);
     try {
-      const res = await axios.post('http://localhost:5001/api/tts/generate-audio', {
-        script: generatedScript,
-        voice: selectedVoice,
-        model: 'tts-1',
+      const res = await api.post('/api/tts/generate-audio', {
+        text: generatedScript,
+        voice: selectedVoice
       });
       setTtsAudioUrl(res.data.audioUrl);
     } catch (error) {
-      console.error(error);
-      alert('Error generating TTS audio');
+      console.error('Error generating TTS:', error);
     } finally {
       setLoadingTTS(false);
     }
@@ -149,15 +146,14 @@ function CreateMeditation() {
     }
     setLoadingMerge(true);
     try {
-      const res = await axios.post('http://localhost:5001/api/tts/mix-with-music', {
+      const res = await api.post('/api/tts/mix-with-music', {
         ttsUrl: ttsAudioUrl,
         musicUrl: selectedMusic,
-        volume: musicVolume,
+        musicVolume: parseFloat(musicVolume)
       });
-      setMergedAudioUrl(res.data.mixedAudioUrl);
+      setMergedAudioUrl(res.data.mergedAudioUrl);
     } catch (error) {
-      console.error(error);
-      alert('Error merging audio');
+      console.error('Error mixing audio:', error);
     } finally {
       setLoadingMerge(false);
     }
@@ -166,61 +162,37 @@ function CreateMeditation() {
   // 4) (Optional) Save the final meditation
   const handleSaveMeditation = async () => {
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        throw new Error('No authentication token found');
-      }
-
-      const response = await axios.post('http://localhost:5001/api/meditations/save', 
-        {
-          goals,
-          styles: selectedStyles,
-          duration,
-          script: generatedScript,
-          audioUrl: mergedAudioUrl || ttsAudioUrl,
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        }
-      );
-
-      console.log('Save response:', response.data);
-      navigate('/dashboard');
+      const response = await api.post('/api/meditations/save', {
+        title,
+        description,
+        audioUrl: mergedAudioUrl,
+        script: generatedScript,
+        duration: parseInt(duration),
+        topic,
+        style
+      });
+      // Handle success
     } catch (error) {
-      console.error('Error saving meditation:', error.response?.data || error);
-      alert(error.response?.data?.details || 'Error saving meditation');
+      console.error('Error saving meditation:', error);
     }
   };
 
   // Add this new function
   const handleMusicUpload = async (event) => {
     const file = event.target.files[0];
-    if (!file) return;
-    
-    setUploadingMusic(true);
     const formData = new FormData();
     formData.append('music', file);
+    formData.append('name', file.name);
 
     try {
-      const response = await axios.post('http://localhost:5001/api/music/upload', formData, {
+      const response = await api.post('/api/music/upload', formData, {
         headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+          'Content-Type': 'multipart/form-data'
+        }
       });
-      // Add the new music to options and select it
-      const newMusic = {
-        name: file.name,
-        url: response.data.url
-      };
-      setMusicOptions(prev => [...prev, newMusic]);
-      setSelectedMusic(response.data.url);
+      // Handle success
     } catch (error) {
-      console.error('Upload error:', error);
-      alert('Error uploading music file');
-    } finally {
-      setUploadingMusic(false);
+      console.error('Error uploading music:', error);
     }
   };
 
@@ -366,7 +338,7 @@ function CreateMeditation() {
         {ttsAudioUrl && !mergedAudioUrl && (
           <div style={styles.section}>
             <h3 style={styles.sectionTitle}>Preview TTS Audio</h3>
-            <audio ref={ttsRef} controls src={`http://localhost:5001${ttsAudioUrl}`} />
+            <audio ref={ttsRef} controls src={`${process.env.REACT_APP_API_URL}${ttsAudioUrl}`} />
             <label style={styles.sectionTitle}>TTS Volume</label>
             <input
               type="range"
@@ -412,7 +384,7 @@ function CreateMeditation() {
                 marginTop: '2rem',
               }}>
                 <h4 style={styles.sectionTitle}>Music Preview</h4>
-                <audio ref={musicRef} controls src={`http://localhost:5001${selectedMusic}`} />
+                <audio ref={musicRef} controls src={`${process.env.REACT_APP_API_URL}${selectedMusic}`} />
                 <label style={styles.sectionTitle}>Music Volume</label>
                 <input
                   type="range"
@@ -445,7 +417,7 @@ function CreateMeditation() {
         {mergedAudioUrl && (
           <div style={styles.section}>
             <h3 style={styles.sectionTitle}>Final Merged Meditation Audio</h3>
-            <audio controls src={`http://localhost:5001${mergedAudioUrl}`} />
+            <audio controls src={`${process.env.REACT_APP_API_URL}${mergedAudioUrl}`} />
           </div>
         )}
 

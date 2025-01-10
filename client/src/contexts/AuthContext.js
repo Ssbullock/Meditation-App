@@ -23,8 +23,8 @@ export const AuthProvider = ({ children }) => {
     setLoading(false);
   }, []);
 
-  const login = () => {
-    window.location.href = 'http://localhost:5001/auth/google';
+  const loginWithGoogle = () => {
+    window.location.href = `${process.env.REACT_APP_API_URL}/auth/google`;
   };
 
   const logout = () => {
@@ -34,7 +34,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, loginWithGoogle, logout }}>
       {children}
     </AuthContext.Provider>
   );
