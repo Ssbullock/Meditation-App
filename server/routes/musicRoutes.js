@@ -14,7 +14,6 @@ const __dirname = path.dirname(__filename);
 // Initialize default music from public/music folder
 const initializeDefaultMusic = async () => {
   try {
-    // Wait for MongoDB connection to be established
     if (mongoose.connection.readyState !== 1) {
       console.log('Waiting for MongoDB connection...');
       setTimeout(initializeDefaultMusic, 5000);
@@ -22,25 +21,26 @@ const initializeDefaultMusic = async () => {
     }
 
     const musicDir = path.join(__dirname, '../public/music');
+    const userMusicDir = path.join(__dirname, '../public/user-music');
     
-    if (!fs.existsSync(musicDir)) {
-      fs.mkdirSync(musicDir, { recursive: true });
-      console.log('Created music directory');
-      return;
-    }
+    // Create directories if they don't exist
+    [musicDir, userMusicDir].forEach(dir => {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+        console.log(`Created directory: ${dir}`);
+      }
+    });
 
     // Read all files from the music directory
     const files = fs.readdirSync(musicDir);
     
     for (const file of files) {
-      // Check if this music file is already in the database
       const existingMusic = await Music.findOne({ 
         name: file,
         isDefault: true 
       });
 
       if (!existingMusic) {
-        // Add new default music to database
         await Music.create({
           name: file,
           url: `/music/${file}`,
@@ -51,7 +51,6 @@ const initializeDefaultMusic = async () => {
     }
   } catch (error) {
     console.error('Error initializing default music:', error);
-    // Don't exit the process, just log the error
   }
 };
 
@@ -61,18 +60,13 @@ initializeDefaultMusic();
 // Get all music (both default and user-specific)
 router.get('/', requireAuth, async (req, res) => {
   try {
-    // Get default music
     const defaultMusic = await Music.find({ isDefault: true });
-    
-    // Get user's music
     const userMusic = await Music.find({ 
       userId: req.user.id,
       isDefault: false 
     });
-
-    // Combine both lists
-    const allMusic = [...defaultMusic, ...userMusic];
     
+    const allMusic = [...defaultMusic, ...userMusic];
     res.json(allMusic);
   } catch (error) {
     console.error('Error fetching music:', error);
@@ -117,7 +111,7 @@ router.post('/upload', requireAuth, async (req, res) => {
   }
 });
 
-// Delete music (only user's own music)
+// Delete music (user-specific only)
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const music = await Music.findOne({ 
@@ -127,9 +121,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
     });
 
     if (!music) {
-      return res.status(404).json({ 
-        error: 'Music not found or you do not have permission to delete it' 
-      });
+      return res.status(404).json({ error: 'Music not found or not authorized to delete' });
     }
 
     // Delete the file
@@ -138,6 +130,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
       fs.unlinkSync(filePath);
     }
 
+    // Delete from database
     await music.deleteOne();
     res.json({ message: 'Music deleted successfully' });
   } catch (error) {

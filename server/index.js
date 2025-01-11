@@ -36,11 +36,21 @@ app.use(express.json());
 // Serve static files: e.g. final audio or music in /public
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Create public/music directory if it doesn't exist
-const musicDir = path.join(__dirname, 'public', 'music');
-if (!fs.existsSync(musicDir)){
-    fs.mkdirSync(musicDir, { recursive: true }); // recursive: true creates parent directories if needed
-}
+// Create necessary directories
+const dirs = [
+  path.join(__dirname, 'public'),
+  path.join(__dirname, 'public/music'),
+  path.join(__dirname, 'public/audio'),
+  path.join(__dirname, 'public/user-music'),
+  path.join(__dirname, 'temp')
+];
+
+dirs.forEach(dir => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`Created directory: ${dir}`);
+  }
+});
 
 // Session configuration
 app.use(session({

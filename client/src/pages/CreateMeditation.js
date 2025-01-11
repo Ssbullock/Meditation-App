@@ -82,9 +82,11 @@ function CreateMeditation() {
   const fetchMusicList = async () => {
     try {
       const res = await api.get('/api/music');
+      console.log('Fetched music options:', res.data);
       setMusicOptions(res.data);
     } catch (error) {
-      console.error('Error fetching music:', error);
+      console.error('Error fetching music:', error.response?.data || error.message);
+      alert('Failed to fetch music list');
     }
   };
 
@@ -222,27 +224,32 @@ function CreateMeditation() {
     const file = event.target.files[0];
     if (!file) return;
 
+    console.log('Uploading music file:', file.name);
     setUploadingMusic(true);
     const formData = new FormData();
     formData.append('music', file);
     formData.append('name', file.name);
 
     try {
-      await api.post('/api/music/upload', formData, {
+      const response = await api.post('/api/music/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data'
         }
       });
-      // Refresh music list after successful upload
-      fetchMusicList();
-      // Reset file input
+      console.log('Upload successful:', response.data);
+      await fetchMusicList();
       event.target.value = '';
     } catch (error) {
-      console.error('Error uploading music:', error);
-      alert('Failed to upload music file');
+      console.error('Error uploading music:', error.response?.data || error.message);
+      alert('Failed to upload music file: ' + (error.response?.data?.error || error.message));
     } finally {
       setUploadingMusic(false);
     }
+  };
+
+  const handleAudioError = (e) => {
+    console.error('Audio playback error:', e);
+    alert('Error playing audio file. Please try again.');
   };
 
   return (
@@ -387,7 +394,7 @@ function CreateMeditation() {
         {ttsAudioUrl && !mergedAudioUrl && (
           <div style={styles.section}>
             <h3 style={styles.sectionTitle}>Preview TTS Audio</h3>
-            <audio ref={ttsRef} controls src={`${process.env.REACT_APP_API_URL}${ttsAudioUrl}`} />
+            <audio ref={ttsRef} controls src={`${process.env.REACT_APP_API_URL}${ttsAudioUrl}`} onError={handleAudioError} />
             <label style={styles.sectionTitle}>TTS Volume</label>
             <input
               type="range"
@@ -425,6 +432,27 @@ function CreateMeditation() {
                 style={{ display: 'none' }}
               />
               {uploadingMusic && <div style={styles.loadingBar}>Uploading music...</div>}
+              
+              {selectedMusic && !musicOptions.find(m => m.url === selectedMusic)?.isDefault && (
+                <button
+                  style={styles.deleteButton}
+                  onClick={async () => {
+                    try {
+                      const musicId = musicOptions.find(m => m.url === selectedMusic)?._id;
+                      if (musicId) {
+                        await api.delete(`/api/music/${musicId}`);
+                        setSelectedMusic('');
+                        fetchMusicList();
+                      }
+                    } catch (error) {
+                      console.error('Error deleting music:', error);
+                      alert('Failed to delete music file');
+                    }
+                  }}
+                >
+                  Delete Music
+                </button>
+              )}
             </div>
 
             {selectedMusic && (
@@ -433,7 +461,7 @@ function CreateMeditation() {
                 marginTop: '2rem',
               }}>
                 <h4 style={styles.sectionTitle}>Music Preview</h4>
-                <audio ref={musicRef} controls src={`${process.env.REACT_APP_API_URL}${selectedMusic}`} />
+                <audio ref={musicRef} controls src={`${process.env.REACT_APP_API_URL}${selectedMusic}`} onError={handleAudioError} />
                 <label style={styles.sectionTitle}>Music Volume</label>
                 <input
                   type="range"
@@ -466,7 +494,7 @@ function CreateMeditation() {
         {mergedAudioUrl && (
           <div style={styles.section}>
             <h3 style={styles.sectionTitle}>Final Merged Meditation Audio</h3>
-            <audio controls src={`${process.env.REACT_APP_API_URL}${mergedAudioUrl}`} />
+            <audio controls src={`${process.env.REACT_APP_API_URL}${mergedAudioUrl}`} onError={handleAudioError} />
           </div>
         )}
 
@@ -740,6 +768,22 @@ const styles = {
     justifyContent: 'center',
     width: '100%',
     marginTop: '2rem',
+  },
+  deleteButton: {
+    backgroundColor: '#dc3545',
+    color: '#fff',
+    border: 'none',
+    padding: '0.8rem 1.5rem',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    fontSize: '1rem',
+    fontWeight: '500',
+    transition: 'all 0.2s ease-in-out',
+    '&:hover': {
+      backgroundColor: '#c82333',
+      transform: 'translateY(-2px)',
+      boxShadow: '0 4px 12px rgba(220, 53, 69, 0.3)',
+    }
   },
 };
 

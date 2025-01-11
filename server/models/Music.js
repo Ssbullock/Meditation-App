@@ -11,7 +11,7 @@ const musicSchema = new mongoose.Schema({
   },
   userId: {
     type: String,
-    default: 'default' // 'default' for system music, user ID for user music
+    required: true
   },
   isDefault: {
     type: Boolean,
