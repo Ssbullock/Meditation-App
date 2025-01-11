@@ -159,11 +159,11 @@ function CreateMeditation() {
         ttsVolume: parseFloat(ttsVolume)
       });
       
-      if (!res.data || !res.data.mergedAudioUrl) {
+      if (!res.data || !res.data.mixedAudioUrl) {
         throw new Error('Invalid response from merge service');
       }
       
-      setMergedAudioUrl(res.data.mergedAudioUrl);
+      setMergedAudioUrl(res.data.mixedAudioUrl);
     } catch (error) {
       console.error('Error mixing audio:', error);
       alert('Failed to merge audio: ' + (error.response?.data?.error || error.message));
