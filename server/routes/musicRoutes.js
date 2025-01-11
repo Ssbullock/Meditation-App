@@ -126,16 +126,24 @@ router.delete('/:id', requireAuth, async (req, res) => {
 
     // Delete the file
     const filePath = path.join(__dirname, '../public', music.url);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    } catch (fileError) {
+      console.error('Error deleting file:', fileError);
+      // Continue with database deletion even if file deletion fails
     }
 
     // Delete from database
-    await music.deleteOne();
+    await Music.deleteOne({ _id: req.params.id });
     res.json({ message: 'Music deleted successfully' });
   } catch (error) {
     console.error('Error deleting music:', error);
-    res.status(500).json({ error: 'Failed to delete music' });
+    res.status(500).json({ 
+      error: 'Failed to delete music',
+      details: error.message 
+    });
   }
 });
 

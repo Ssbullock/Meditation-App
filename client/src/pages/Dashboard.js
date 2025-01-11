@@ -40,25 +40,25 @@ function Dashboard() {
     setSelectedTab(tab);
   };
 
-  const handleDeleteMusic = async (filename) => {
+  const handleDeleteMusic = async (musicId) => {
     try {
-      await api.delete(`/api/music/${filename}`);
+      await api.delete(`/api/music/${musicId}`);
       // Refresh the music list
       fetchMusicFiles();
     } catch (error) {
       console.error('Error deleting music file:', error);
-      alert('Failed to delete music file');
+      alert('Failed to delete music file: ' + (error.response?.data?.error || error.message));
     }
   };
 
-  const handleDeleteMeditation = async (id) => {
+  const handleDeleteMeditation = async (meditationId) => {
     try {
-      await api.delete(`/api/meditations/${id}`);
+      await api.delete(`/api/meditations/${meditationId}`);
       // Refresh the meditations list
       fetchMeditations();
     } catch (error) {
       console.error('Error deleting meditation:', error);
-      alert('Failed to delete meditation');
+      alert('Failed to delete meditation: ' + (error.response?.data?.error || error.message));
     }
   };
 
@@ -89,13 +89,13 @@ function Dashboard() {
           <div>
             <h2 style={styles.contentHeader}>Saved Meditations</h2>
             {savedMeditations.map((med) => (
-              <div key={med.id} className="card">
+              <div key={med._id} className="card">
                 <div style={styles.cardHeader}>
                   <h3 style={styles.cardTitle}>
                     {med.title || `Meditation (${new Date(med.createdAt).toLocaleDateString()})`}
                   </h3>
                   <button
-                    onClick={() => handleDeleteMeditation(med.id)}
+                    onClick={() => handleDeleteMeditation(med._id)}
                     className="delete-button"
                   >
                     Delete
@@ -127,23 +127,21 @@ function Dashboard() {
 
         {selectedTab === 'songs' && (
           <div>
-            <h2 style={styles.contentHeader}>Background Music</h2>
-            {musicFiles.map((file) => (
-              <div key={file.url} className="card">
+            <h2 style={styles.contentHeader}>Music Library</h2>
+            {musicFiles.map((music) => (
+              <div key={music._id} className="card">
                 <div style={styles.cardHeader}>
-                  <h3 style={styles.cardTitle}>{file.name}</h3>
-                  <button
-                    onClick={() => handleDeleteMusic(file.name)}
-                    className="delete-button"
-                  >
-                    Delete
-                  </button>
+                  <h3 style={styles.cardTitle}>{music.name}</h3>
+                  {!music.isDefault && (
+                    <button
+                      onClick={() => handleDeleteMusic(music._id)}
+                      className="delete-button"
+                    >
+                      Delete
+                    </button>
+                  )}
                 </div>
-                <audio
-                  controls
-                  src={`${process.env.REACT_APP_API_URL}${file.url}`}
-                  style={styles.audioPlayer}
-                />
+                <audio controls src={`${process.env.REACT_APP_API_URL}${music.url}`} />
               </div>
             ))}
           </div>
