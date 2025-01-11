@@ -152,7 +152,8 @@ Guidelines:
     const enhancementPrompt = `
 Please expand on the following meditation script to enhance the user's experience. 
 Make sure to add more short pauses of 2-3 seconds to improve the flow of the meditation. 
-Ensure that the meditation fits the allotted time of ${duration} minutes.
+Ensure that the meditation fits the allotted time of ${duration} minutes. Feel free to add more repetitions or 
+expand or certain parts to make the meditation the appropriate length. 
 
 Here is the initial script:
 ${generatedScript}

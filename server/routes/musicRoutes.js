@@ -34,21 +34,32 @@ const initializeDefaultMusic = async () => {
     // Read all files from the music directory
     const files = fs.readdirSync(musicDir);
     
+    // First, mark all existing default music as non-default
+    await Music.updateMany(
+      { isDefault: true },
+      { $set: { isDefault: false } }
+    );
+
+    // Then add new default music
     for (const file of files) {
-      const existingMusic = await Music.findOne({ 
-        name: file,
-        isDefault: true 
-      });
+      const existingMusic = await Music.findOne({ name: file });
 
       if (!existingMusic) {
         await Music.create({
           name: file,
           url: `/music/${file}`,
           isDefault: true,
-          userId: 'default'
+          userId: null  // Default music doesn't belong to any user
         });
+      } else {
+        // Update existing music to be default
+        existingMusic.isDefault = true;
+        existingMusic.userId = null;
+        await existingMusic.save();
       }
     }
+
+    console.log('Default music initialized successfully');
   } catch (error) {
     console.error('Error initializing default music:', error);
   }
@@ -60,10 +71,13 @@ initializeDefaultMusic();
 // Get all music (both default and user-specific)
 router.get('/', requireAuth, async (req, res) => {
   try {
+    // Get default music
     const defaultMusic = await Music.find({ isDefault: true });
+    
+    // Get user's music (non-default music that belongs to the user)
     const userMusic = await Music.find({ 
       userId: req.user.id,
-      isDefault: false 
+      isDefault: { $ne: true }  // Explicitly exclude default music
     });
     
     const allMusic = [...defaultMusic, ...userMusic];
