@@ -158,9 +158,23 @@ function adjustScriptDuration(script, currentDuration, targetDuration) {
   }
 }
 
+// Add helper function to calculate max tokens based on duration
+function calculateMaxTokens(durationMinutes) {
+  // Base: 2000 tokens for 7 minutes
+  const baseTokens = 2000;
+  const baseMinutes = 7;
+  
+  // Calculate required tokens with a 20% buffer
+  const calculatedTokens = Math.ceil((durationMinutes / baseMinutes) * baseTokens * 1.2);
+  
+  // Cap at 4096 (GPT-4's limit) and ensure minimum of 2000
+  return Math.min(4096, Math.max(2000, calculatedTokens));
+}
+
 // Add helper function to expand script
 async function expandScript(script, currentDuration, targetDuration, style) {
   const expansionFactor = Math.min(3, targetDuration * 60 / currentDuration);
+  const maxTokens = calculateMaxTokens(targetDuration);
   
   const expansionPrompt = `
 You are expanding a meditation script. You MUST keep ALL existing content and add new content to reach the target duration.
@@ -205,7 +219,7 @@ ${script}
       }
     ],
     temperature: 0.7,
-    max_tokens: 2500,
+    max_tokens: maxTokens,
     presence_penalty: 0.7,
     frequency_penalty: 0.9,
   });
@@ -280,7 +294,7 @@ Format: Natural spoken language with {{PAUSE_Xs}} placeholders for pauses.
 
 Guidelines:
 - Target exactly ${targetWords} words of speaking content
-- Use {{PAUSE_15s}} for major transitions
+- Use {{PAUSE_15s}} for major transitions, breathing time, visualization time etc.
 - Use {{PAUSE_8s}} between instructions
 - Use {{PAUSE_3s}} for brief pauses
 - Include settling period at start (30-45 seconds)
@@ -299,6 +313,8 @@ Each section should flow naturally into the next, using varied language and avoi
 `;
 
     console.log('Making first OpenAI API call...');
+    const maxTokens = calculateMaxTokens(duration);
+    console.log(`Using max tokens: ${maxTokens} for ${duration} minute meditation`);
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
@@ -312,7 +328,7 @@ Each section should flow naturally into the next, using varied language and avoi
         }
       ],
       temperature: 0.7,
-      max_tokens: 2000,
+      max_tokens: maxTokens,
       presence_penalty: 0.7,
       frequency_penalty: 0.9,
     });
