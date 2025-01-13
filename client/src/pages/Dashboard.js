@@ -118,6 +118,7 @@ function Dashboard() {
                     controls
                     src={`${process.env.REACT_APP_API_URL}${med.audioUrl}`}
                     style={styles.audioPlayer}
+                    preload="metadata"
                   />
                 )}
               </div>
@@ -141,7 +142,12 @@ function Dashboard() {
                     </button>
                   )}
                 </div>
-                <audio controls src={`${process.env.REACT_APP_API_URL}${music.url}`} />
+                <audio 
+                  controls 
+                  src={`${process.env.REACT_APP_API_URL}${music.url}`} 
+                  preload="metadata"
+                  onError={(e) => console.error('Audio error:', e)}
+                />
               </div>
             ))}
           </div>

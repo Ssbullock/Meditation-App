@@ -30,15 +30,36 @@ app.use(cors({
     'https://custom-meditations.netlify.app'
   ],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Range'],
+  exposedHeaders: ['Content-Range', 'Content-Length', 'Accept-Ranges']
 }));
-app.use(express.json());
+
+// Enable CORS for static files
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Range');
+  res.header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+  next();
+});
+
+// Serve static files with proper headers
+const serveStaticWithHeaders = (directory) => {
+  return express.static(directory, {
+    setHeaders: (res, path) => {
+      res.set({
+        'Accept-Ranges': 'bytes',
+        'Content-Type': 'audio/mpeg'
+      });
+    }
+  });
+};
 
 // Serve static files: e.g. final audio or music in /public
-app.use('/music', express.static(path.join(__dirname, 'public/music')));
-app.use('/audio', express.static(path.join(__dirname, 'public/audio')));
-app.use('/user-music', express.static(path.join(__dirname, 'public/user-music')));
+app.use('/music', serveStaticWithHeaders(path.join(__dirname, 'public/music')));
+app.use('/audio', serveStaticWithHeaders(path.join(__dirname, 'public/audio')));
+app.use('/user-music', serveStaticWithHeaders(path.join(__dirname, 'public/user-music')));
 
 // Create necessary directories
 const dirs = [
