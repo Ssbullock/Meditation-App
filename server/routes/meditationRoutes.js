@@ -158,6 +158,43 @@ function adjustScriptDuration(script, currentDuration, targetDuration) {
   }
 }
 
+// Add helper function to expand script
+async function expandScript(script, currentDuration, targetDuration, style) {
+  const expansionFactor = Math.min(3, targetDuration * 60 / currentDuration);
+  
+  const expansionPrompt = `
+Please expand this meditation script to be ${Math.round(expansionFactor * 100)}% longer while maintaining the same style and flow.
+Current duration: ${Math.round(currentDuration / 60)} minutes
+Target duration: ${targetDuration} minutes
+
+Guidelines for expansion:
+1. Add more detailed instructions and descriptions
+2. Include more repetitions of key exercises
+3. Add longer pauses between sections
+4. Maintain the "${style}" meditation style
+5. Keep the same general structure but expand each section
+6. Ensure smooth transitions between expanded sections
+
+Original script:
+${script}
+`;
+
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4o',
+    messages: [{ role: 'user', content: expansionPrompt }],
+    temperature: 0.7,
+    max_tokens: 2000,
+    presence_penalty: 0.2,
+    frequency_penalty: 0.4,
+  });
+
+  if (!response.choices?.[0]?.message?.content) {
+    throw new Error('Invalid response from OpenAI API during expansion');
+  }
+
+  return response.choices[0].message.content.trim();
+}
+
 // Update the generate route
 router.post('/generate', async (req, res) => {
   try {
@@ -199,7 +236,7 @@ router.post('/generate', async (req, res) => {
     // Calculate target words based on duration
     const targetWords = Math.round((duration * 130) * 0.6); // 60% of time for speaking
     
-    // Optimize the prompt for faster generation
+    // Initial prompt for script generation
     const prompt = `
 Create a ${duration}-minute meditation script. Style: ${style}. Goals: ${extraNotes}
 Format: Natural spoken language with {{PAUSE_Xs}} placeholders for pauses.
@@ -229,17 +266,27 @@ Guidelines:
     }
 
     let generatedScript = response.choices[0].message.content.trim();
-    
-    // Calculate actual duration
     let scriptDuration = calculateScriptDuration(generatedScript);
     console.log('Initial script duration:', scriptDuration, 'seconds');
 
-    // If duration is off by more than 30 seconds, adjust it
+    // Iteratively expand the script until we reach the target duration
+    let iterations = 0;
+    const maxIterations = 3;
+    
+    while (scriptDuration < duration * 60 * 0.9 && iterations < maxIterations) { // Allow 10% under target
+      console.log(`Iteration ${iterations + 1}: Expanding script...`);
+      generatedScript = await expandScript(generatedScript, scriptDuration, duration, style);
+      scriptDuration = calculateScriptDuration(generatedScript);
+      console.log(`Expanded script duration: ${scriptDuration} seconds`);
+      iterations++;
+    }
+
+    // Final adjustment of pause durations if needed
     if (Math.abs(scriptDuration - duration * 60) > 30) {
-      console.log('Adjusting script duration...');
+      console.log('Final adjustment of pause durations...');
       generatedScript = adjustScriptDuration(generatedScript, scriptDuration, duration);
       scriptDuration = calculateScriptDuration(generatedScript);
-      console.log('Adjusted script duration:', scriptDuration, 'seconds');
+      console.log('Final script duration:', scriptDuration, 'seconds');
     }
 
     // Cache the result
@@ -255,7 +302,8 @@ Guidelines:
       durationDetails: {
         requestedMinutes: duration,
         actualSeconds: scriptDuration,
-        difference: Math.abs(scriptDuration - duration * 60)
+        difference: Math.abs(scriptDuration - duration * 60),
+        iterations: iterations
       }
     });
   } catch (error) {
