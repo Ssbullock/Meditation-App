@@ -168,9 +168,9 @@ Current duration: ${Math.round(currentDuration / 60)} minutes
 Target duration: ${targetDuration} minutes
 
 Guidelines for expansion:
-1. Add more detailed instructions and descriptions
-2. Include more repetitions of key exercises
-3. Add longer pauses between sections
+1. Add more detailed instructions to the script
+2. Include repetitions of key exercises (like breathing, body scans, etc.)
+3. Add more {{PAUSE_Xs}} placeholders between sentences and sections
 4. Maintain the "${style}" meditation style
 5. Keep the same general structure but expand each section
 6. Ensure smooth transitions between expanded sections
