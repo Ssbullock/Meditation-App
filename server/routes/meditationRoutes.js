@@ -116,6 +116,19 @@ router.post('/generate', async (req, res) => {
   try {
     const { duration, style, extraNotes } = req.body;
     
+    if (!duration || !style) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: 'Duration and style are required'
+      });
+    }
+
+    console.log('Generating meditation script with:', {
+      duration,
+      style,
+      extraNotes: extraNotes || 'none'
+    });
+    
     // Check cache first
     const cacheKey = generateCacheKey(duration, style, extraNotes);
     const cachedResult = scriptCache.get(cacheKey);
@@ -148,6 +161,10 @@ Guidelines:
       frequency_penalty: 0,
     });
 
+    if (!response.choices || !response.choices[0] || !response.choices[0].message) {
+      throw new Error('Invalid response from OpenAI API');
+    }
+
     const generatedScript = response.choices[0].message.content.trim();
 
     // Create a new prompt for the second API call
@@ -171,6 +188,10 @@ ${generatedScript}
       frequency_penalty: 0,
     });
 
+    if (!enhancedResponse.choices || !enhancedResponse.choices[0] || !enhancedResponse.choices[0].message) {
+      throw new Error('Invalid response from OpenAI API during enhancement');
+    }
+
     const enhancedScript = enhancedResponse.choices[0].message.content.trim();
 
     // Cache the result
@@ -179,6 +200,7 @@ ${generatedScript}
       timestamp: Date.now()
     });
 
+    console.log('Successfully generated meditation script');
     return res.json({ script: enhancedScript });
   } catch (error) {
     console.error('Error generating meditation script:', error);
