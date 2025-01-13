@@ -163,36 +163,49 @@ async function expandScript(script, currentDuration, targetDuration, style) {
   const expansionFactor = Math.min(3, targetDuration * 60 / currentDuration);
   
   const expansionPrompt = `
-Please expand this meditation script to be ${Math.round(expansionFactor * 100)}% longer while maintaining the same style and flow.
-Current duration: ${Math.round(currentDuration / 60)} minutes
+You are expanding a meditation script. You MUST keep ALL existing content and add new content to reach the target duration.
+
+Current script duration: ${Math.round(currentDuration / 60)} minutes
 Target duration: ${targetDuration} minutes
+Required expansion: Add ${Math.round(expansionFactor * 100 - 100)}% more content
 
-Guidelines for expansion:
-1. Add more detailed and varied instructions - describe sensations, feelings, and experiences in rich, non-repetitive language
-2. Include meaningful repetitions of key exercises with different wording each time
-3. Add {{PAUSE_Xs}} placeholders between sections (use varying durations)
-4. Maintain the "${style}" meditation style
-5. Keep the same general structure but expand each section with unique content
-6. Ensure smooth transitions between sections
-7. IMPORTANT: Avoid word repetition - use synonyms and varied language
-8. Each repeated instruction should be reworded differently
-9. If extending a section about peace/relaxation/etc, use varied descriptive language instead of repeating the same word
+IMPORTANT RULES:
+1. NEVER remove or modify existing content
+2. ONLY ADD new content between existing sections
+3. Keep the same style and flow as the original
+4. Use varied, non-repetitive language in new content
+5. Add new sections that complement existing ones
+6. Maintain "${style}" meditation style throughout
+7. Add appropriate {{PAUSE_Xs}} placeholders between new sections
 
-Bad example (avoid this):
-"Feel peaceful, peaceful, peaceful as you breathe peacefully and find peace..."
+Example of good expansion:
+Original:
+"Take a deep breath in... {{PAUSE_3s}} And release... {{PAUSE_3s}}"
 
-Good example (do this):
-"Let a sense of tranquility wash over you... Feel the gentle calm spreading through your body... Experience this moment of deep serenity..."
+Expanded (good):
+"Take a deep breath in... {{PAUSE_3s}} And release... {{PAUSE_3s}}
+Now, feel the weight of your body... {{PAUSE_3s}} Notice where you make contact with the surface below... {{PAUSE_5s}}
+Take another deep breath in... {{PAUSE_3s}} And let it flow out naturally... {{PAUSE_3s}}"
 
-Original script:
+Here's the script to expand. Remember to KEEP ALL EXISTING CONTENT and ADD MORE content between sections:
+
 ${script}
 `;
 
   const response = await openai.chat.completions.create({
     model: 'gpt-4o',
-    messages: [{ role: 'user', content: expansionPrompt }],
+    messages: [
+      { 
+        role: 'system', 
+        content: 'You are a meditation script expander. You must preserve all existing content and only add new content to reach the target duration. Never remove or modify existing text.'
+      },
+      { 
+        role: 'user', 
+        content: expansionPrompt 
+      }
+    ],
     temperature: 0.7,
-    max_tokens: 2000,
+    max_tokens: 2500,
     presence_penalty: 0.7,
     frequency_penalty: 0.9,
   });
@@ -203,8 +216,18 @@ ${script}
 
   let expandedScript = response.choices[0].message.content.trim();
   
-  // Post-process the script to catch and fix any remaining repetition
-  expandedScript = expandedScript.replace(/(\b\w+\b)(\s+\1\b)+/gi, '$1');  // Remove immediate word repetitions
+  // Verify that all original content is preserved
+  const originalWords = script.split(/\s+/);
+  const expandedWords = expandedScript.split(/\s+/);
+  
+  // If the expanded version is shorter, something went wrong - retry with stricter prompt
+  if (expandedWords.length <= originalWords.length) {
+    console.log('Expansion failed to increase length, retrying with stricter prompt...');
+    return expandScript(script, currentDuration, targetDuration, style);
+  }
+  
+  // Post-process to remove any immediate word repetitions
+  expandedScript = expandedScript.replace(/(\b\w+\b)(\s+\1\b)+/gi, '$1');
   
   return expandedScript;
 }
@@ -251,9 +274,10 @@ router.post('/generate', async (req, res) => {
     const targetWords = Math.round((duration * 130) * 0.6); // 60% of time for speaking
     
     // Initial prompt for script generation
-    const prompt = `
+    const initialPrompt = `
 Create a ${duration}-minute meditation script. Style: ${style}. Goals: ${extraNotes}
 Format: Natural spoken language with {{PAUSE_Xs}} placeholders for pauses.
+
 Guidelines:
 - Target exactly ${targetWords} words of speaking content
 - Use {{PAUSE_15s}} for major transitions
@@ -262,17 +286,35 @@ Guidelines:
 - Include settling period at start (30-45 seconds)
 - End with gentle return to awareness (30 seconds)
 - Distribute pauses evenly throughout the script
+- Use varied, non-repetitive language
 - Total duration must be exactly ${duration} minutes
-    `;
+
+Structure:
+1. Opening (settling in, initial relaxation)
+2. Main practice (${style}-specific instructions)
+3. Deepening (enhanced relaxation and awareness)
+4. Closing (gentle return to awareness)
+
+Each section should flow naturally into the next, using varied language and avoiding repetition.
+`;
 
     console.log('Making first OpenAI API call...');
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a meditation script writer. Create natural, flowing meditation scripts with appropriate pauses and varied language.'
+        },
+        {
+          role: 'user',
+          content: initialPrompt
+        }
+      ],
       temperature: 0.7,
       max_tokens: 2000,
-      presence_penalty: 0,
-      frequency_penalty: 0,
+      presence_penalty: 0.7,
+      frequency_penalty: 0.9,
     });
 
     if (!response.choices?.[0]?.message?.content) {
