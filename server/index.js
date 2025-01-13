@@ -35,31 +35,33 @@ app.use(cors({
   exposedHeaders: ['Content-Range', 'Content-Length', 'Accept-Ranges']
 }));
 
-// Enable CORS for static files
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+// Static files CORS configuration
+app.use('/music', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'https://custom-meditations.netlify.app');
   res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Range');
+  res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
   next();
-});
+}, serveStaticWithHeaders(path.join(__dirname, 'public/music')));
 
-// Serve static files with proper headers
-const serveStaticWithHeaders = (directory) => {
-  return express.static(directory, {
-    setHeaders: (res, path) => {
-      res.set({
-        'Accept-Ranges': 'bytes',
-        'Content-Type': 'audio/mpeg'
-      });
-    }
-  });
-};
+app.use('/audio', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'https://custom-meditations.netlify.app');
+  res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Range');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+  next();
+}, serveStaticWithHeaders(path.join(__dirname, 'public/audio')));
 
-// Serve static files: e.g. final audio or music in /public
-app.use('/music', serveStaticWithHeaders(path.join(__dirname, 'public/music')));
-app.use('/audio', serveStaticWithHeaders(path.join(__dirname, 'public/audio')));
-app.use('/user-music', serveStaticWithHeaders(path.join(__dirname, 'public/user-music')));
+app.use('/user-music', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'https://custom-meditations.netlify.app');
+  res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Range');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Expose-Headers', 'Content-Range, Content-Length, Accept-Ranges');
+  next();
+}, serveStaticWithHeaders(path.join(__dirname, 'public/user-music')));
 
 // Create necessary directories
 const dirs = [

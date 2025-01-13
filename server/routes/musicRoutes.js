@@ -11,70 +11,57 @@ const router = Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Initialize default music from public/music folder
+// Initialize default music
 const initializeDefaultMusic = async () => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      console.log('Waiting for MongoDB connection...');
-      setTimeout(initializeDefaultMusic, 5000);
-      return;
-    }
+    // Get all files in the music directory
+    const musicFiles = fs.readdirSync(path.join(process.cwd(), 'public/music'));
+    console.log('Found default music files:', musicFiles);
 
-    const musicDir = path.join(__dirname, '../public/music');
-    const userMusicDir = path.join(__dirname, '../public/user-music');
-    
-    // Create directories if they don't exist
-    [musicDir, userMusicDir].forEach(dir => {
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-        console.log(`Created directory: ${dir}`);
-      }
-    });
+    // Mark all existing default music as non-default
+    await Music.updateMany({ isDefault: true }, { isDefault: false });
 
-    // Read all files from the music directory
-    const files = fs.readdirSync(musicDir);
-    console.log('Found default music files:', files);
+    // Create a system user ID for default music if it doesn't exist
+    const systemUserId = '000000000000000000000000'; // 24-character hex string
 
-    // Keep track of processed default files
-    const processedFiles = new Set();
-
-    // Add or update default music
-    for (const file of files) {
-      processedFiles.add(file);
-      const existingMusic = await Music.findOne({ 
-        name: file,
-        isDefault: true
-      });
+    // Process each file
+    for (const file of musicFiles) {
+      const musicPath = `/music/${file}`;
+      const existingMusic = await Music.findOne({ url: musicPath });
 
       if (!existingMusic) {
         console.log('Creating new default music:', file);
         await Music.create({
-          name: file,
-          url: `/music/${file}`,
+          name: file.replace(/\.[^/.]+$/, ''), // Remove file extension
+          url: musicPath,
           isDefault: true,
-          userId: null
+          userId: systemUserId // Use system user ID for default music
         });
+      } else {
+        // Update existing music to be default
+        existingMusic.isDefault = true;
+        existingMusic.userId = systemUserId;
+        await existingMusic.save();
       }
     }
 
     // Remove any default music that no longer exists in the directory
-    const allDefaultMusic = await Music.find({ isDefault: true });
-    for (const music of allDefaultMusic) {
+    const defaultMusic = await Music.find({ isDefault: true });
+    for (const music of defaultMusic) {
       const fileName = path.basename(music.url);
-      if (!processedFiles.has(fileName)) {
-        console.log('Removing obsolete default music:', fileName);
+      if (!musicFiles.includes(fileName)) {
         await Music.deleteOne({ _id: music._id });
       }
     }
 
     console.log('Default music initialization complete');
   } catch (error) {
-    console.error('Error initializing default music:', error);
+    console.warn('Error initializing default music:', error);
   }
 };
 
-// Call this when the server starts
-initializeDefaultMusic();
+// Call initialization on startup
+setTimeout(initializeDefaultMusic, 1000); // Wait for DB connection
 
 // Get all music (both default and user-specific)
 router.get('/', requireAuth, async (req, res) => {
