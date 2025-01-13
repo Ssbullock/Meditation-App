@@ -82,8 +82,10 @@ router.post('/save', requireAuth, async (req, res) => {
 // Get all meditations for the user
 router.get('/', requireAuth, async (req, res) => {
   try {
+    console.log('Fetching meditations for user:', req.user.id);
     const meditations = await Meditation.find({ userId: req.user.id })
       .sort({ createdAt: -1 });
+    console.log('Found meditations:', meditations.length);
     res.json(meditations);
   } catch (error) {
     console.error('Error fetching meditations:', error);

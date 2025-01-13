@@ -36,7 +36,9 @@ app.use(cors({
 app.use(express.json());
 
 // Serve static files: e.g. final audio or music in /public
-app.use(express.static(path.join(__dirname, 'public')));
+app.use('/music', express.static(path.join(__dirname, 'public/music')));
+app.use('/audio', express.static(path.join(__dirname, 'public/audio')));
+app.use('/user-music', express.static(path.join(__dirname, 'public/user-music')));
 
 // Create necessary directories
 const dirs = [
@@ -51,6 +53,8 @@ dirs.forEach(dir => {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
     console.log(`Created directory: ${dir}`);
+  } else {
+    console.log(`Directory exists: ${dir}`);
   }
 });
 
