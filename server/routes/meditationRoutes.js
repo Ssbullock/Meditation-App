@@ -114,12 +114,18 @@ router.delete('/:id', requireAuth, async (req, res) => {
 // Add back the script generation route
 router.post('/generate', async (req, res) => {
   try {
-    const { duration, style, extraNotes } = req.body;
+    console.log('Received meditation generation request:', {
+      body: req.body,
+      contentType: req.headers['content-type']
+    });
+
+    const { duration, style, extraNotes } = req.body || {};
     
     if (!duration || !style) {
       return res.status(400).json({ 
         error: 'Missing required fields',
-        details: 'Duration and style are required'
+        details: 'Duration and style are required',
+        receivedBody: req.body
       });
     }
 
@@ -128,12 +134,18 @@ router.post('/generate', async (req, res) => {
       style,
       extraNotes: extraNotes || 'none'
     });
+
+    // Verify OpenAI API key is set
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OpenAI API key is not configured');
+    }
     
     // Check cache first
     const cacheKey = generateCacheKey(duration, style, extraNotes);
     const cachedResult = scriptCache.get(cacheKey);
     
     if (cachedResult && (Date.now() - cachedResult.timestamp < CACHE_DURATION)) {
+      console.log('Returning cached meditation script');
       return res.json({ script: cachedResult.script });
     }
 
@@ -151,6 +163,7 @@ Guidelines:
 - End with gentle return to awareness
     `;
 
+    console.log('Making first OpenAI API call...');
     // First API call to generate the initial script
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -162,10 +175,12 @@ Guidelines:
     });
 
     if (!response.choices || !response.choices[0] || !response.choices[0].message) {
+      console.error('Invalid OpenAI API response:', response);
       throw new Error('Invalid response from OpenAI API');
     }
 
     const generatedScript = response.choices[0].message.content.trim();
+    console.log('First script generated successfully');
 
     // Create a new prompt for the second API call
     const enhancementPrompt = `
@@ -178,6 +193,7 @@ Here is the initial script:
 ${generatedScript}
     `;
 
+    console.log('Making second OpenAI API call...');
     // Second API call to enhance the meditation script
     const enhancedResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -189,10 +205,12 @@ ${generatedScript}
     });
 
     if (!enhancedResponse.choices || !enhancedResponse.choices[0] || !enhancedResponse.choices[0].message) {
+      console.error('Invalid OpenAI API response during enhancement:', enhancedResponse);
       throw new Error('Invalid response from OpenAI API during enhancement');
     }
 
     const enhancedScript = enhancedResponse.choices[0].message.content.trim();
+    console.log('Enhanced script generated successfully');
 
     // Cache the result
     scriptCache.set(cacheKey, {
@@ -204,9 +222,13 @@ ${generatedScript}
     return res.json({ script: enhancedScript });
   } catch (error) {
     console.error('Error generating meditation script:', error);
+    if (error.response) {
+      console.error('OpenAI API error response:', error.response.data);
+    }
     return res.status(500).json({ 
       error: 'Failed to generate script.',
-      details: error.message 
+      details: error.message,
+      apiError: error.response?.data
     });
   }
 });
