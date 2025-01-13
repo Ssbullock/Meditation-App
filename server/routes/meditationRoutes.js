@@ -111,7 +111,54 @@ router.delete('/:id', requireAuth, async (req, res) => {
   }
 });
 
-// Add back the script generation route
+// Add helper function to calculate script duration
+function calculateScriptDuration(script) {
+  // Average speaking rate (words per minute)
+  const WORDS_PER_MINUTE = 130;
+  const WORDS_PER_SECOND = WORDS_PER_MINUTE / 60;
+
+  // Count words in script (excluding pause placeholders)
+  const words = script.replace(/{{PAUSE_\d+s}}/g, '').split(/\s+/).length;
+  
+  // Calculate speaking time in seconds
+  const speakingTime = words / WORDS_PER_SECOND;
+  
+  // Calculate total pause time
+  const pauseMatches = script.match(/{{PAUSE_(\d+)s}}/g) || [];
+  const pauseTime = pauseMatches.reduce((total, pause) => {
+    const seconds = parseInt(pause.match(/\d+/)[0]);
+    return total + seconds;
+  }, 0);
+  
+  // Total duration in seconds
+  return Math.round(speakingTime + pauseTime);
+}
+
+// Add helper function to adjust script duration
+function adjustScriptDuration(script, currentDuration, targetDuration) {
+  const diffSeconds = targetDuration * 60 - currentDuration;
+  
+  if (Math.abs(diffSeconds) <= 30) {
+    // If within 30 seconds of target, it's close enough
+    return script;
+  }
+
+  if (diffSeconds > 0) {
+    // Need to add time - increase pause durations
+    return script.replace(/{{PAUSE_(\d+)s}}/g, (match, seconds) => {
+      const newDuration = Math.round(parseInt(seconds) * (targetDuration * 60 / currentDuration));
+      return `{{PAUSE_${newDuration}s}}`;
+    });
+  } else {
+    // Need to reduce time - decrease pause durations
+    return script.replace(/{{PAUSE_(\d+)s}}/g, (match, seconds) => {
+      const newDuration = Math.max(2, Math.round(parseInt(seconds) * (targetDuration * 60 / currentDuration)));
+      return `{{PAUSE_${newDuration}s}}`;
+    });
+  }
+}
+
+// Update the generate route
 router.post('/generate', async (req, res) => {
   try {
     console.log('Received meditation generation request:', {
@@ -149,22 +196,25 @@ router.post('/generate', async (req, res) => {
       return res.json({ script: cachedResult.script });
     }
 
+    // Calculate target words based on duration
+    const targetWords = Math.round((duration * 130) * 0.6); // 60% of time for speaking
+    
     // Optimize the prompt for faster generation
     const prompt = `
 Create a ${duration}-minute meditation script. Style: ${style}. Goals: ${extraNotes}
 Format: Natural spoken language with {{PAUSE_Xs}} placeholders for pauses.
 Guidelines:
+- Target exactly ${targetWords} words of speaking content
 - Use {{PAUSE_15s}} for major transitions
 - Use {{PAUSE_8s}} between instructions
 - Use {{PAUSE_3s}} for brief pauses
-- Target 130 words per minute of speaking time
-- Focus on clarity and brevity
-- Include settling period at start
-- End with gentle return to awareness
+- Include settling period at start (30-45 seconds)
+- End with gentle return to awareness (30 seconds)
+- Distribute pauses evenly throughout the script
+- Total duration must be exactly ${duration} minutes
     `;
 
     console.log('Making first OpenAI API call...');
-    // First API call to generate the initial script
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [{ role: 'user', content: prompt }],
@@ -174,52 +224,40 @@ Guidelines:
       frequency_penalty: 0,
     });
 
-    if (!response.choices || !response.choices[0] || !response.choices[0].message) {
-      console.error('Invalid OpenAI API response:', response);
+    if (!response.choices?.[0]?.message?.content) {
       throw new Error('Invalid response from OpenAI API');
     }
 
-    const generatedScript = response.choices[0].message.content.trim();
-    console.log('First script generated successfully');
+    let generatedScript = response.choices[0].message.content.trim();
+    
+    // Calculate actual duration
+    let scriptDuration = calculateScriptDuration(generatedScript);
+    console.log('Initial script duration:', scriptDuration, 'seconds');
 
-    // Create a new prompt for the second API call
-    const enhancementPrompt = `
-Please expand on the following meditation script to enhance the user's experience. 
-Make sure to add more short pauses of 2-3 seconds to improve the flow of the meditation. 
-Ensure that the meditation fits the allotted time of ${duration} minutes. Feel free to add more repetitions or 
-expand or certain parts to make the meditation the appropriate length. 
-
-Here is the initial script:
-${generatedScript}
-    `;
-
-    console.log('Making second OpenAI API call...');
-    // Second API call to enhance the meditation script
-    const enhancedResponse = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: enhancementPrompt }],
-      temperature: 0.7,
-      max_tokens: 2000,
-      presence_penalty: 0,
-      frequency_penalty: 0,
-    });
-
-    if (!enhancedResponse.choices || !enhancedResponse.choices[0] || !enhancedResponse.choices[0].message) {
-      console.error('Invalid OpenAI API response during enhancement:', enhancedResponse);
-      throw new Error('Invalid response from OpenAI API during enhancement');
+    // If duration is off by more than 30 seconds, adjust it
+    if (Math.abs(scriptDuration - duration * 60) > 30) {
+      console.log('Adjusting script duration...');
+      generatedScript = adjustScriptDuration(generatedScript, scriptDuration, duration);
+      scriptDuration = calculateScriptDuration(generatedScript);
+      console.log('Adjusted script duration:', scriptDuration, 'seconds');
     }
-
-    const enhancedScript = enhancedResponse.choices[0].message.content.trim();
-    console.log('Enhanced script generated successfully');
 
     // Cache the result
     scriptCache.set(cacheKey, {
-      script: enhancedScript,
+      script: generatedScript,
       timestamp: Date.now()
     });
 
     console.log('Successfully generated meditation script');
-    return res.json({ script: enhancedScript });
+    return res.json({ 
+      script: generatedScript,
+      calculatedDuration: Math.round(scriptDuration / 60),
+      durationDetails: {
+        requestedMinutes: duration,
+        actualSeconds: scriptDuration,
+        difference: Math.abs(scriptDuration - duration * 60)
+      }
+    });
   } catch (error) {
     console.error('Error generating meditation script:', error);
     if (error.response) {
