@@ -24,6 +24,18 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+// Serve static files with proper headers
+const serveStaticWithHeaders = (directory) => {
+  return express.static(directory, {
+    setHeaders: (res, path) => {
+      res.set({
+        'Accept-Ranges': 'bytes',
+        'Content-Type': 'audio/mpeg'
+      });
+    }
+  });
+};
+
 app.use(cors({
   origin: [
     'http://localhost:3000',
