@@ -17,7 +17,8 @@ router.get('/google/callback',
       email: req.user.email,
       picture: req.user.picture
     }, process.env.JWT_SECRET);
-    res.redirect(`https://custom-meditations.netlify.app/auth-callback?token=${token}`);
+    const clientURL = process.env.CLIENT_URL || 'https://custom-meditations.netlify.app';
+    res.redirect(`${clientURL}/auth-callback?token=${token}`);
   }
 );
 

@@ -119,7 +119,7 @@ app.use(passport.session());
 passport.use(new GoogleStrategy({
   clientID: process.env.GOOGLE_CLIENT_ID,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  callbackURL: "https://meditation-app-6wyw.onrender.com/auth/google/callback"
+  callbackURL: process.env.GOOGLE_CALLBACK_URL || "https://meditation-app-6wyw.onrender.com/auth/google/callback"
 }, async (accessToken, refreshToken, profile, done) => {
   try {
     let user = await User.findOne({ googleId: profile.id });
