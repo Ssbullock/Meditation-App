@@ -168,12 +168,21 @@ Current duration: ${Math.round(currentDuration / 60)} minutes
 Target duration: ${targetDuration} minutes
 
 Guidelines for expansion:
-1. Add more detailed instructions to the script
-2. Include repetitions of key exercises (like breathing, body scans, etc.)
-3. Add more {{PAUSE_Xs}} placeholders between sentences and sections
+1. Add more detailed and varied instructions - describe sensations, feelings, and experiences in rich, non-repetitive language
+2. Include meaningful repetitions of key exercises with different wording each time
+3. Add {{PAUSE_Xs}} placeholders between sections (use varying durations)
 4. Maintain the "${style}" meditation style
-5. Keep the same general structure but expand each section
-6. Ensure smooth transitions between expanded sections
+5. Keep the same general structure but expand each section with unique content
+6. Ensure smooth transitions between sections
+7. IMPORTANT: Avoid word repetition - use synonyms and varied language
+8. Each repeated instruction should be reworded differently
+9. If extending a section about peace/relaxation/etc, use varied descriptive language instead of repeating the same word
+
+Bad example (avoid this):
+"Feel peaceful, peaceful, peaceful as you breathe peacefully and find peace..."
+
+Good example (do this):
+"Let a sense of tranquility wash over you... Feel the gentle calm spreading through your body... Experience this moment of deep serenity..."
 
 Original script:
 ${script}
@@ -184,15 +193,20 @@ ${script}
     messages: [{ role: 'user', content: expansionPrompt }],
     temperature: 0.7,
     max_tokens: 2000,
-    presence_penalty: 0.2,
-    frequency_penalty: 0.4,
+    presence_penalty: 0.7,
+    frequency_penalty: 0.9,
   });
 
   if (!response.choices?.[0]?.message?.content) {
     throw new Error('Invalid response from OpenAI API during expansion');
   }
 
-  return response.choices[0].message.content.trim();
+  let expandedScript = response.choices[0].message.content.trim();
+  
+  // Post-process the script to catch and fix any remaining repetition
+  expandedScript = expandedScript.replace(/(\b\w+\b)(\s+\1\b)+/gi, '$1');  // Remove immediate word repetitions
+  
+  return expandedScript;
 }
 
 // Update the generate route
