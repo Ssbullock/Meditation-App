@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import ffmpeg from 'fluent-ffmpeg';
 import OpenAI from 'openai';
 import { mkdir } from 'fs/promises';
+import crypto from 'crypto';
 
 const router = Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -29,6 +30,52 @@ const audioDir = path.join(__dirname, '../public/audio');
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
+
+// Add audio chunk cache
+const audioChunkCache = new Map();
+const CHUNK_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
+// Add cache cleanup interval
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of audioChunkCache.entries()) {
+    if (now - value.timestamp > CHUNK_CACHE_DURATION) {
+      // Delete the cached file
+      if (fs.existsSync(value.path)) {
+        fs.unlinkSync(value.path);
+      }
+      audioChunkCache.delete(key);
+    }
+  }
+}, CHUNK_CACHE_DURATION);
+
+function generateChunkCacheKey(text, voice, model) {
+  const data = `${text}-${voice}-${model}`;
+  return crypto.createHash('md5').update(data).digest('hex');
+}
+
+// Optimize silence generation with pre-generated silence files
+const SILENCE_CACHE = new Map();
+async function getOrCreateSilence(seconds) {
+  const key = Math.round(seconds * 10) / 10; // Round to nearest 0.1s
+  
+  if (SILENCE_CACHE.has(key)) {
+    return SILENCE_CACHE.get(key);
+  }
+
+  const silenceFile = path.join(tempDir, `silence-${key}s.mp3`);
+  
+  // If file exists on disk, use it
+  if (fs.existsSync(silenceFile)) {
+    SILENCE_CACHE.set(key, silenceFile);
+    return silenceFile;
+  }
+
+  // Generate new silence file
+  await generateSilence(seconds, silenceFile);
+  SILENCE_CACHE.set(key, silenceFile);
+  return silenceFile;
+}
 
 /**
  * Helper: parse script with placeholders like {{PAUSE_5s}} and add natural pauses
@@ -87,17 +134,23 @@ function parsePlaceholders(script) {
 }
 
 /**
- * Helper to generate TTS for a single block
+ * Helper to generate TTS for a single block with caching
  */
 async function generateTTSForBlock(block, voice, model, index) {
   if (!block.text) {
-    // For pause blocks, generate silence
+    // For pause blocks, use pre-generated silence
     if (block.pause > 0) {
-      const silenceFile = path.join(tempDir, `silence-${Date.now()}-${index}.mp3`);
-      await generateSilence(block.pause, silenceFile);
-      return silenceFile;
+      return await getOrCreateSilence(block.pause);
     }
     return null;
+  }
+
+  // Check cache first
+  const cacheKey = generateChunkCacheKey(block.text, voice, model);
+  const cachedChunk = audioChunkCache.get(cacheKey);
+  if (cachedChunk && fs.existsSync(cachedChunk.path)) {
+    console.log(`Using cached audio chunk ${index}`);
+    return cachedChunk.path;
   }
 
   // Generate TTS for text block
@@ -112,9 +165,16 @@ async function generateTTSForBlock(block, voice, model, index) {
   }
 
   const buffer = Buffer.from(await mp3Response.arrayBuffer());
-  const outFile = `chunk-${Date.now()}-${index}.mp3`;
+  const outFile = `chunk-${cacheKey}.mp3`;
   const outPath = path.join(tempDir, outFile);
   await fs.promises.writeFile(outPath, buffer);
+  
+  // Cache the chunk
+  audioChunkCache.set(cacheKey, {
+    path: outPath,
+    timestamp: Date.now()
+  });
+  
   return outPath;
 }
 
@@ -178,16 +238,24 @@ router.post('/generate-audio', async (req, res) => {
     const blocks = parsePlaceholders(text);
     console.log(`Split into ${blocks.length} blocks for processing`);
 
-    // Process blocks in parallel with a concurrency limit of 3
+    // Process blocks in parallel with increased concurrency
     const chunkFiles = [];
-    const concurrencyLimit = 3;
+    const concurrencyLimit = 5; // Increased from 3 to 5
+    const batches = [];
+    
+    // Split blocks into batches
     for (let i = 0; i < blocks.length; i += concurrencyLimit) {
-      const batch = blocks.slice(i, i + concurrencyLimit);
+      batches.push(blocks.slice(i, i + concurrencyLimit));
+    }
+
+    // Process batches with progress tracking
+    let completedBlocks = 0;
+    for (const batch of batches) {
       const batchResults = await Promise.all(
         batch.map((block, index) => 
-          generateTTSForBlock(block, voice, model, i + index)
+          generateTTSForBlock(block, voice, model, completedBlocks + index)
             .catch(error => {
-              console.error(`Error processing block ${i + index}:`, error);
+              console.error(`Error processing block ${completedBlocks + index}:`, error);
               return null;
             })
         )
@@ -196,8 +264,10 @@ router.post('/generate-audio', async (req, res) => {
       // Filter out null results and add successful files
       chunkFiles.push(...batchResults.filter(file => file !== null));
       
-      // Log progress
-      console.log(`Processed ${Math.min(i + concurrencyLimit, blocks.length)}/${blocks.length} blocks`);
+      // Update progress
+      completedBlocks += batch.length;
+      const progress = Math.round((completedBlocks / blocks.length) * 100);
+      console.log(`Progress: ${progress}% (${completedBlocks}/${blocks.length} blocks)`);
     }
 
     if (chunkFiles.length === 0) {
@@ -214,18 +284,25 @@ router.post('/generate-audio', async (req, res) => {
     await mergeChunksEfficiently(chunkFiles, finalPath);
     console.log('Merge complete');
 
-    // Cleanup temp files
-    for (const file of chunkFiles) {
+    // Don't delete cached files, only temporary merge files
+    const tempFiles = chunkFiles.filter(file => !file.includes('chunk-') && !file.includes('silence-'));
+    for (const file of tempFiles) {
       if (fs.existsSync(file)) {
         fs.unlinkSync(file);
       }
     }
 
     const endTime = Date.now();
-    console.log(`Total TTS generation time: ${(endTime - startTime) / 1000} seconds`);
+    const generationTime = (endTime - startTime) / 1000;
+    console.log(`Total TTS generation time: ${generationTime} seconds`);
 
     const audioUrl = `/audio/${finalFileName}`;
-    return res.json({ audioUrl, generationTime: (endTime - startTime) / 1000 });
+    return res.json({ 
+      audioUrl, 
+      generationTime,
+      chunksProcessed: blocks.length,
+      cached: blocks.length - completedBlocks
+    });
   } catch (error) {
     console.error('Error generating TTS audio:', error);
     return res.status(500).json({ 
