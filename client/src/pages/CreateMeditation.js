@@ -63,6 +63,9 @@ function CreateMeditation() {
   const [generationTime, setGenerationTime] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
 
+  const [ttsGenerationTime, setTtsGenerationTime] = useState(null);
+  const [generatingTTS, setGeneratingTTS] = useState(false);
+
   const navigate = useNavigate();
 
   // Fetch music list on mount
@@ -155,24 +158,37 @@ function CreateMeditation() {
       return;
     }
     setLoadingTTS(true);
+    setGeneratingTTS(true);
+    setTtsGenerationTime(0);
+    
+    const startTime = Date.now();
+    const timerInterval = setInterval(() => {
+      setTtsGenerationTime(Math.round((Date.now() - startTime) / 100) / 10);
+    }, 100);
+
     try {
       const res = await api.post('/api/tts/generate-audio', {
         text: generatedScript,
         voice: selectedVoice
       });
 
+      clearInterval(timerInterval);
+      
       if (!res.data || !res.data.audioUrl) {
         throw new Error('Invalid response from TTS service');
       }
 
       setTtsAudioUrl(res.data.audioUrl);
+      setTtsGenerationTime(res.data.generationTime || Math.round((Date.now() - startTime) / 100) / 10);
       console.log('TTS generation successful');
     } catch (error) {
+      clearInterval(timerInterval);
       console.error('Error generating TTS:', error);
       const errorMessage = error.response?.data?.details || error.message || 'Failed to generate audio';
       alert(`Error generating audio: ${errorMessage}`);
     } finally {
       setLoadingTTS(false);
+      setGeneratingTTS(false);
     }
   };
 
@@ -408,22 +424,33 @@ function CreateMeditation() {
               </div>
             </div>
 
-            <button 
-              style={{
-                ...styles.mainButton,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }} 
-              onClick={handleGenerateTTS} 
-              disabled={loadingTTS}
-            >
-              {loadingTTS ? (
-                <div style={styles.spinner} />
-              ) : (
-                'Generate TTS Audio'
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <button 
+                style={{
+                  ...styles.mainButton,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }} 
+                onClick={handleGenerateTTS} 
+                disabled={loadingTTS}
+              >
+                {loadingTTS ? (
+                  <div style={styles.spinner} />
+                ) : (
+                  'Generate TTS Audio'
+                )}
+              </button>
+              {(generatingTTS || ttsGenerationTime !== null) && (
+                <span style={{ 
+                  color: '#4a5568',
+                  fontSize: '0.9rem',
+                  fontFamily: 'monospace'
+                }}>
+                  {generatingTTS ? `${ttsGenerationTime}s...` : `Generated in ${ttsGenerationTime}s`}
+                </span>
               )}
-            </button>
+            </div>
           </div>
         )}
 

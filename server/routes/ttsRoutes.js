@@ -36,7 +36,7 @@ const openai = new OpenAI({
  */
 function parsePlaceholders(script) {
   const blocks = [];
-  const MAX_CHUNK_LENGTH = 4000;
+  const MAX_CHUNK_LENGTH = 4000; // OpenAI's limit is 4096
 
   // First, normalize the script to ensure consistent spacing
   const normalizedScript = script.replace(/\s+/g, ' ').trim();
@@ -55,12 +55,12 @@ function parsePlaceholders(script) {
       continue;
     }
 
-    // Handle text segments
+    // Split long text segments into smaller chunks at natural break points
     let remainingText = segment;
     while (remainingText.length > 0) {
       let chunkLength = Math.min(remainingText.length, MAX_CHUNK_LENGTH);
       
-      // Find a natural break point
+      // Find a natural break point if we're splitting
       if (chunkLength < remainingText.length) {
         const lastPeriod = remainingText.lastIndexOf('.', chunkLength);
         const lastComma = remainingText.lastIndexOf(',', chunkLength);
@@ -87,114 +87,41 @@ function parsePlaceholders(script) {
 }
 
 /**
- * POST /api/tts/generate-audio
- * Body: { script: string, voice?: string, model?: string }
- * 1) parse placeholders
- * 2) TTS each text block
- * 3) add silent segments for pause placeholders
- * 4) merge all into single MP3
+ * Helper to generate TTS for a single block
  */
-router.post('/generate-audio', async (req, res) => {
-  try {
-    const { text, voice = 'alloy', model = 'tts-1' } = req.body;
-    if (!text) {
-      return res.status(400).json({ error: 'No text provided' });
+async function generateTTSForBlock(block, voice, model, index) {
+  if (!block.text) {
+    // For pause blocks, generate silence
+    if (block.pause > 0) {
+      const silenceFile = path.join(tempDir, `silence-${Date.now()}-${index}.mp3`);
+      await generateSilence(block.pause, silenceFile);
+      return silenceFile;
     }
-
-    console.log('Starting TTS generation with:', {
-      textLength: text.length,
-      voice,
-      model
-    });
-
-    const blocks = parsePlaceholders(text);
-    const chunkFiles = [];
-    
-    // Process each block sequentially
-    for (let i = 0; i < blocks.length; i++) {
-      const block = blocks[i];
-      try {
-        if (block.text) {
-          console.log(`Processing text chunk ${i + 1}/${blocks.length}:`, block.text.slice(0, 50) + '...');
-          
-          // Validate text length for OpenAI API
-          if (block.text.length > 4096) {
-            throw new Error('Text chunk exceeds maximum length of 4096 characters');
-          }
-
-          const mp3Response = await openai.audio.speech.create({
-            model,
-            voice,
-            input: block.text,
-          });
-
-          if (!mp3Response) {
-            throw new Error('No response from OpenAI TTS API');
-          }
-
-          const buffer = Buffer.from(await mp3Response.arrayBuffer());
-          const outFile = `chunk-${Date.now()}-${i}.mp3`;
-          const outPath = path.join(tempDir, outFile);
-          await fs.promises.writeFile(outPath, buffer);
-          chunkFiles.push(outPath);
-          console.log(`Successfully processed chunk ${i + 1}`);
-        }
-        
-        if (block.pause > 0) {
-          console.log(`Generating silence for ${block.pause}s`);
-          const silenceFile = path.join(tempDir, `silence-${Date.now()}-${i}.mp3`);
-          await generateSilence(block.pause, silenceFile);
-          chunkFiles.push(silenceFile);
-        }
-      } catch (error) {
-        console.error(`Error processing chunk ${i}:`, error);
-        // Clean up any files created so far
-        for (const file of chunkFiles) {
-          if (fs.existsSync(file)) {
-            fs.unlinkSync(file);
-          }
-        }
-        throw new Error(`Failed to process text chunk ${i + 1}: ${error.message}`);
-      }
-    }
-
-    if (chunkFiles.length === 0) {
-      throw new Error('No audio chunks were generated');
-    }
-
-    console.log(`Merging ${chunkFiles.length} audio files...`);
-    const finalFileName = `meditation-${Date.now()}.mp3`;
-    const finalPath = path.join(audioDir, finalFileName);
-
-    // Ensure audio directory exists
-    await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
-
-    await mergeChunks(chunkFiles, finalPath);
-    console.log('Merge complete');
-
-    // Cleanup temp files
-    for (const file of chunkFiles) {
-      if (fs.existsSync(file)) {
-        fs.unlinkSync(file);
-      }
-    }
-
-    const audioUrl = `/audio/${finalFileName}`;
-    return res.json({ audioUrl });
-  } catch (error) {
-    console.error('Error generating TTS audio:', error);
-    return res.status(500).json({ 
-      error: 'Failed to generate audio',
-      details: error.message,
-      step: error.step || 'unknown'
-    });
+    return null;
   }
-});
+
+  // Generate TTS for text block
+  const mp3Response = await openai.audio.speech.create({
+    model,
+    voice,
+    input: block.text,
+  });
+
+  if (!mp3Response) {
+    throw new Error('No response from OpenAI TTS API');
+  }
+
+  const buffer = Buffer.from(await mp3Response.arrayBuffer());
+  const outFile = `chunk-${Date.now()}-${index}.mp3`;
+  const outPath = path.join(tempDir, outFile);
+  await fs.promises.writeFile(outPath, buffer);
+  return outPath;
+}
 
 /**
- * Helper to merge an array of MP3 files in sequence using FFmpeg.
+ * Helper to merge chunks more efficiently using FFmpeg concat demuxer
  */
-async function mergeChunks(files, outputPath) {
+async function mergeChunksEfficiently(files, outputPath) {
   if (files.length === 0) {
     throw new Error('No files to merge');
   }
@@ -216,10 +143,8 @@ async function mergeChunks(files, outputPath) {
         .input(listPath)
         .inputOptions(['-f', 'concat', '-safe', '0'])
         .outputOptions([
-          '-c:a', 'libmp3lame',
-          '-b:a', '192k',
-          '-ar', '44100',
-          '-ac', '2'
+          '-c:a', 'copy', // Use copy codec for faster processing
+          '-movflags', '+faststart' // Enable fast start for streaming
         ])
         .on('end', resolve)
         .on('error', reject)
@@ -232,6 +157,84 @@ async function mergeChunks(files, outputPath) {
     }
   }
 }
+
+/**
+ * POST /api/tts/generate-audio
+ */
+router.post('/generate-audio', async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { text, voice = 'alloy', model = 'tts-1' } = req.body;
+    if (!text) {
+      return res.status(400).json({ error: 'No text provided' });
+    }
+
+    console.log('Starting TTS generation with:', {
+      textLength: text.length,
+      voice,
+      model
+    });
+
+    const blocks = parsePlaceholders(text);
+    console.log(`Split into ${blocks.length} blocks for processing`);
+
+    // Process blocks in parallel with a concurrency limit of 3
+    const chunkFiles = [];
+    const concurrencyLimit = 3;
+    for (let i = 0; i < blocks.length; i += concurrencyLimit) {
+      const batch = blocks.slice(i, i + concurrencyLimit);
+      const batchResults = await Promise.all(
+        batch.map((block, index) => 
+          generateTTSForBlock(block, voice, model, i + index)
+            .catch(error => {
+              console.error(`Error processing block ${i + index}:`, error);
+              return null;
+            })
+        )
+      );
+      
+      // Filter out null results and add successful files
+      chunkFiles.push(...batchResults.filter(file => file !== null));
+      
+      // Log progress
+      console.log(`Processed ${Math.min(i + concurrencyLimit, blocks.length)}/${blocks.length} blocks`);
+    }
+
+    if (chunkFiles.length === 0) {
+      throw new Error('No audio chunks were generated');
+    }
+
+    console.log(`Merging ${chunkFiles.length} audio files...`);
+    const finalFileName = `meditation-${Date.now()}.mp3`;
+    const finalPath = path.join(audioDir, finalFileName);
+
+    // Ensure audio directory exists
+    await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
+
+    await mergeChunksEfficiently(chunkFiles, finalPath);
+    console.log('Merge complete');
+
+    // Cleanup temp files
+    for (const file of chunkFiles) {
+      if (fs.existsSync(file)) {
+        fs.unlinkSync(file);
+      }
+    }
+
+    const endTime = Date.now();
+    console.log(`Total TTS generation time: ${(endTime - startTime) / 1000} seconds`);
+
+    const audioUrl = `/audio/${finalFileName}`;
+    return res.json({ audioUrl, generationTime: (endTime - startTime) / 1000 });
+  } catch (error) {
+    console.error('Error generating TTS audio:', error);
+    return res.status(500).json({ 
+      error: 'Failed to generate audio',
+      details: error.message,
+      step: error.step || 'unknown'
+    });
+  }
+});
 
 /**
  * POST /api/tts/mix-with-music
