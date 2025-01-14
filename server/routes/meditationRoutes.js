@@ -246,7 +246,93 @@ ${script}
   return expandedScript;
 }
 
-// Add back the script generation route
+// Add helper function to generate script parts
+async function generateScriptPart(duration, style, extraNotes, part) {
+  let prompt;
+  switch (part) {
+    case 'beginning':
+      prompt = `
+Create the opening ${Math.round(duration * 0.3)} minutes of a ${duration}-minute ${style} meditation. Goals: ${extraNotes}
+Format: Natural spoken language with {{PAUSE_Xs}} placeholders for pauses.
+
+This is PART 1 of 3 (Opening 30% of meditation). Focus on:
+- Setting the foundation and atmosphere
+- Initial settling in and relaxation
+- Introducing basic breathing patterns
+- Establishing the meditation's intention
+
+Guidelines:
+- Use {{PAUSE_15s}} for major transitions
+- Use {{PAUSE_8s}} between instructions
+- Use {{PAUSE_3s}} for brief pauses
+- Target 130 words per minute of speaking time
+- Focus on clarity and brevity
+- Do NOT include any meta text or section markers
+`;
+      break;
+    case 'middle':
+      prompt = `
+Create the main body ${Math.round(duration * 0.55)} minutes of a ${duration}-minute ${style} meditation. Goals: ${extraNotes}
+Format: Natural spoken language with {{PAUSE_Xs}} placeholders for pauses.
+
+This is PART 2 of 3 (Main body 55% of meditation). Focus on:
+- Core meditation practices and techniques
+- Deeper exploration of the ${style} style
+- Progressive relaxation or awareness exercises
+- Include longer pauses for practice
+
+Guidelines:
+- Use {{PAUSE_120s}} for extended practice periods
+- Use {{PAUSE_60s}} for significant practice moments
+- Use {{PAUSE_30s}} for medium transitions
+- Use {{PAUSE_15s}} for regular transitions
+- Use {{PAUSE_8s}} between instructions
+- Use {{PAUSE_3s}} for brief pauses
+- Target 130 words per minute of speaking time
+- Focus on clarity and brevity
+- Do NOT include any meta text or section markers
+`;
+      break;
+    case 'end':
+      prompt = `
+Create the closing ${Math.round(duration * 0.15)} minutes of a ${duration}-minute ${style} meditation. Goals: ${extraNotes}
+Format: Natural spoken language with {{PAUSE_Xs}} placeholders for pauses.
+
+This is PART 3 of 3 (Closing 15% of meditation). Focus on:
+- Gently concluding the practice
+- Integrating the experience
+- Bringing awareness back to the body
+- Preparing for return to regular activity
+
+Guidelines:
+- Use {{PAUSE_15s}} for transitions
+- Use {{PAUSE_8s}} between instructions
+- Use {{PAUSE_3s}} for brief pauses
+- Target 130 words per minute of speaking time
+- Focus on clarity and brevity
+- End with gentle return to awareness
+- Do NOT include any meta text or section markers
+`;
+      break;
+  }
+
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4o',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.7,
+    max_tokens: 2000,
+    presence_penalty: 0,
+    frequency_penalty: 0,
+  });
+
+  if (!response.choices?.[0]?.message?.content) {
+    throw new Error(`Invalid response from OpenAI API for ${part} part`);
+  }
+
+  return response.choices[0].message.content.trim();
+}
+
+// Update the generate route
 router.post('/generate', async (req, res) => {
   try {
     console.log('Received meditation generation request:', {
@@ -284,36 +370,54 @@ router.post('/generate', async (req, res) => {
       return res.json({ script: cachedResult.script });
     }
 
-    // Optimize the prompt for faster generation
-    const prompt = `
+    let generatedScript;
+    if (duration > 8) {
+      // Generate script in parts for longer meditations
+      console.log('Generating long meditation in parts...');
+      
+      console.log('Generating beginning part...');
+      const beginningPart = await generateScriptPart(duration, style, extraNotes, 'beginning');
+      
+      console.log('Generating middle part...');
+      const middlePart = await generateScriptPart(duration, style, extraNotes, 'middle');
+      
+      console.log('Generating end part...');
+      const endPart = await generateScriptPart(duration, style, extraNotes, 'end');
+      
+      // Combine parts with smooth transitions
+      generatedScript = `${beginningPart}\n\n${middlePart}\n\n${endPart}`;
+    } else {
+      // Use single prompt for shorter meditations
+      const prompt = `
 Create a ${duration}-minute meditation script. Style: ${style}. Goals: ${extraNotes}
 Format: Natural spoken language with {{PAUSE_Xs}} placeholders for pauses.
 Guidelines:
-- Use {{PAUSE_15s}} for major transitions, breathing time, visualization time etc.
+- Use {{PAUSE_15s}} for major transitions
 - Use {{PAUSE_8s}} between instructions
 - Use {{PAUSE_3s}} for brief pauses
 - Target 130 words per minute of speaking time
 - Focus on clarity and brevity
 - Include settling period at start
 - End with gentle return to awareness
-    `;
+      `;
 
-    console.log('Making OpenAI API call...');
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7,
-      max_tokens: 2000,
-      presence_penalty: 0,
-      frequency_penalty: 0,
-    });
+      console.log('Making OpenAI API call for short meditation...');
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+        max_tokens: 2000,
+        presence_penalty: 0,
+        frequency_penalty: 0,
+      });
 
-    if (!response.choices || !response.choices[0] || !response.choices[0].message) {
-      console.error('Invalid OpenAI API response:', response);
-      throw new Error('Invalid response from OpenAI API');
+      if (!response.choices?.[0]?.message?.content) {
+        throw new Error('Invalid response from OpenAI API');
+      }
+
+      generatedScript = response.choices[0].message.content.trim();
     }
 
-    const generatedScript = response.choices[0].message.content.trim();
     console.log('Script generated successfully');
 
     // Cache the result
