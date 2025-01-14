@@ -372,17 +372,17 @@ router.post('/generate', async (req, res) => {
 
     let generatedScript;
     if (duration > 8) {
-      // Generate script in parts for longer meditations
-      console.log('Generating long meditation in parts...');
+      // Generate script parts in parallel for longer meditations
+      console.log('Generating long meditation parts in parallel...');
       
-      console.log('Generating beginning part...');
-      const beginningPart = await generateScriptPart(duration, style, extraNotes, 'beginning');
-      
-      console.log('Generating middle part...');
-      const middlePart = await generateScriptPart(duration, style, extraNotes, 'middle');
-      
-      console.log('Generating end part...');
-      const endPart = await generateScriptPart(duration, style, extraNotes, 'end');
+      const startTime = Date.now();
+      const [beginningPart, middlePart, endPart] = await Promise.all([
+        generateScriptPart(duration, style, extraNotes, 'beginning'),
+        generateScriptPart(duration, style, extraNotes, 'middle'),
+        generateScriptPart(duration, style, extraNotes, 'end')
+      ]);
+      const endTime = Date.now();
+      console.log(`Generated all parts in ${(endTime - startTime) / 1000} seconds`);
       
       // Combine parts with smooth transitions
       generatedScript = `${beginningPart}\n\n${middlePart}\n\n${endPart}`;
@@ -401,6 +401,7 @@ Guidelines:
 - End with gentle return to awareness
       `;
 
+      const startTime = Date.now();
       console.log('Making OpenAI API call for short meditation...');
       const response = await openai.chat.completions.create({
         model: 'gpt-4o',
@@ -410,6 +411,8 @@ Guidelines:
         presence_penalty: 0,
         frequency_penalty: 0,
       });
+      const endTime = Date.now();
+      console.log(`Generated script in ${(endTime - startTime) / 1000} seconds`);
 
       if (!response.choices?.[0]?.message?.content) {
         throw new Error('Invalid response from OpenAI API');

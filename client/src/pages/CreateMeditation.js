@@ -60,6 +60,9 @@ function CreateMeditation() {
   // Add this state for handling hover
   const [hoveredStyle, setHoveredStyle] = useState(null);
 
+  const [generationTime, setGenerationTime] = useState(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+
   const navigate = useNavigate();
 
   // Fetch music list on mount
@@ -103,18 +106,45 @@ function CreateMeditation() {
 
   // 1) Generate script
   const handleGenerateScript = async () => {
-    setLoadingScript(true);
     try {
-      const res = await api.post('/api/meditations/generate', {
-        duration: parseInt(duration),
-        style: selectedStyles.join(', '),
-        extraNotes: `User's goals: ${goals}`
+      setIsGenerating(true);
+      setGenerationTime(0);
+      const startTime = Date.now();
+      
+      // Start timer update interval
+      const timerInterval = setInterval(() => {
+        setGenerationTime(Math.round((Date.now() - startTime) / 100) / 10);
+      }, 100);
+
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/meditations/generate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          duration: parseInt(duration),
+          style: selectedStyles.join(', '),
+          extraNotes: `User's goals: ${goals}`
+        }),
       });
-      setGeneratedScript(res.data.script);
+
+      clearInterval(timerInterval);
+      const endTime = Date.now();
+      setGenerationTime(Math.round((endTime - startTime) / 100) / 10);
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.details || 'Failed to generate script');
+      }
+
+      const data = await response.json();
+      setGeneratedScript(data.script);
+      setLoadingScript(false);
     } catch (error) {
       console.error('Error generating script:', error);
+      alert(error.message);
     } finally {
-      setLoadingScript(false);
+      setIsGenerating(false);
     }
   };
 
@@ -321,24 +351,31 @@ function CreateMeditation() {
 
         {/* Generate Script Button */}
         <div style={styles.section}>
-          <button 
-            style={{
-              ...styles.mainButton,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              minWidth: '150px',
-              height: '40px',
-            }} 
-            onClick={handleGenerateScript} 
-            disabled={loadingScript}
-          >
-            {loadingScript ? (
-              <div style={styles.spinner} />
-            ) : (
-              'Generate Script'
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <button 
+              style={{
+                ...styles.mainButton,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minWidth: '150px',
+                height: '40px',
+              }} 
+              onClick={handleGenerateScript} 
+              disabled={isGenerating || !selectedStyles.length || !goals.length}
+            >
+              {isGenerating ? 'Generating...' : 'Generate Script'}
+            </button>
+            {(isGenerating || generationTime !== null) && (
+              <span style={{ 
+                color: '#4a5568',
+                fontSize: '0.9rem',
+                fontFamily: 'monospace'
+              }}>
+                {isGenerating ? `${generationTime}s...` : `Generated in ${generationTime}s`}
+              </span>
             )}
-          </button>
+          </div>
         </div>
 
         {/* Script + Voice + Generate TTS */}
