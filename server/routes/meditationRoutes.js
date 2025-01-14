@@ -246,7 +246,7 @@ ${script}
   return expandedScript;
 }
 
-// Update the generate route
+// Add back the script generation route
 router.post('/generate', async (req, res) => {
   try {
     console.log('Received meditation generation request:', {
@@ -284,82 +284,37 @@ router.post('/generate', async (req, res) => {
       return res.json({ script: cachedResult.script });
     }
 
-    // Calculate target words based on duration
-    const targetWords = Math.round((duration * 130) * 0.6); // 60% of time for speaking
-    
-    // Initial prompt for script generation
-    const initialPrompt = `
+    // Optimize the prompt for faster generation
+    const prompt = `
 Create a ${duration}-minute meditation script. Style: ${style}. Goals: ${extraNotes}
 Format: Natural spoken language with {{PAUSE_Xs}} placeholders for pauses.
-
 Guidelines:
-- Target exactly ${targetWords} words of speaking content
 - Use {{PAUSE_15s}} for major transitions, breathing time, visualization time etc.
 - Use {{PAUSE_8s}} between instructions
 - Use {{PAUSE_3s}} for brief pauses
-- Include settling period at start (30-45 seconds)
-- End with gentle return to awareness (30 seconds)
-- Distribute pauses evenly throughout the script
-- Use varied, non-repetitive language
-- Total duration must be exactly ${duration} minutes
+- Target 130 words per minute of speaking time
+- Focus on clarity and brevity
+- Include settling period at start
+- End with gentle return to awareness
+    `;
 
-Structure:
-1. Opening (settling in, initial relaxation)
-2. Main practice (${style}-specific instructions)
-3. Deepening (enhanced relaxation and awareness)
-4. Closing (gentle return to awareness)
-
-Each section should flow naturally into the next, using varied language and avoiding repetition.
-`;
-
-    console.log('Making first OpenAI API call...');
-    const maxTokens = calculateMaxTokens(duration);
-    console.log(`Using max tokens: ${maxTokens} for ${duration} minute meditation`);
+    console.log('Making OpenAI API call...');
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a meditation script writer. Create natural, flowing meditation scripts with appropriate pauses and varied language.'
-        },
-        {
-          role: 'user',
-          content: initialPrompt
-        }
-      ],
+      messages: [{ role: 'user', content: prompt }],
       temperature: 0.7,
-      max_tokens: maxTokens,
-      presence_penalty: 0.7,
-      frequency_penalty: 0.9,
+      max_tokens: 2000,
+      presence_penalty: 0,
+      frequency_penalty: 0,
     });
 
-    if (!response.choices?.[0]?.message?.content) {
+    if (!response.choices || !response.choices[0] || !response.choices[0].message) {
+      console.error('Invalid OpenAI API response:', response);
       throw new Error('Invalid response from OpenAI API');
     }
 
-    let generatedScript = response.choices[0].message.content.trim();
-    let scriptDuration = calculateScriptDuration(generatedScript);
-    console.log('Initial script duration:', scriptDuration, 'seconds');
-
-    // Iteratively expand the script until we reach the target duration
-    let iterations = 0;
-    const maxIterations = 3;
-    
-    while (scriptDuration < duration * 60 * 0.9 && iterations < maxIterations) { // Allow 10% under target
-      console.log(`Iteration ${iterations + 1}: Expanding script...`);
-      generatedScript = await expandScript(generatedScript, scriptDuration, duration, style);
-      scriptDuration = calculateScriptDuration(generatedScript);
-      console.log(`Expanded script duration: ${scriptDuration} seconds`);
-      iterations++;
-    }
-
-    // Final adjustment of pause durations if needed
-    if (Math.abs(scriptDuration - duration * 60) > 30) {
-      console.log('Final adjustment of pause durations...');
-      generatedScript = adjustScriptDuration(generatedScript, scriptDuration, duration);
-      scriptDuration = calculateScriptDuration(generatedScript);
-      console.log('Final script duration:', scriptDuration, 'seconds');
-    }
+    const generatedScript = response.choices[0].message.content.trim();
+    console.log('Script generated successfully');
 
     // Cache the result
     scriptCache.set(cacheKey, {
@@ -368,16 +323,7 @@ Each section should flow naturally into the next, using varied language and avoi
     });
 
     console.log('Successfully generated meditation script');
-    return res.json({ 
-      script: generatedScript,
-      calculatedDuration: Math.round(scriptDuration / 60),
-      durationDetails: {
-        requestedMinutes: duration,
-        actualSeconds: scriptDuration,
-        difference: Math.abs(scriptDuration - duration * 60),
-        iterations: iterations
-      }
-    });
+    return res.json({ script: generatedScript });
   } catch (error) {
     console.error('Error generating meditation script:', error);
     if (error.response) {
