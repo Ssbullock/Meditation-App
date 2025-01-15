@@ -238,9 +238,9 @@ router.post('/generate-audio', async (req, res) => {
     const blocks = parsePlaceholders(text);
     console.log(`Split into ${blocks.length} blocks for processing`);
 
-    // Process blocks in parallel with increased concurrency
+    // Increase concurrency for faster processing
     const chunkFiles = [];
-    const concurrencyLimit = 5; // Increased from 3 to 5
+    const concurrencyLimit = 8; // Increased from 5 to 8 for faster processing
     const batches = [];
     
     // Split blocks into batches
@@ -261,13 +261,9 @@ router.post('/generate-audio', async (req, res) => {
         )
       );
       
-      // Filter out null results and add successful files
       chunkFiles.push(...batchResults.filter(file => file !== null));
-      
-      // Update progress
       completedBlocks += batch.length;
-      const progress = Math.round((completedBlocks / blocks.length) * 100);
-      console.log(`Progress: ${progress}% (${completedBlocks}/${blocks.length} blocks)`);
+      console.log(`Progress: ${Math.round((completedBlocks / blocks.length) * 100)}% (${completedBlocks}/${blocks.length} blocks)`);
     }
 
     if (chunkFiles.length === 0) {
@@ -278,13 +274,10 @@ router.post('/generate-audio', async (req, res) => {
     const finalFileName = `meditation-${Date.now()}.mp3`;
     const finalPath = path.join(audioDir, finalFileName);
 
-    // Ensure audio directory exists
     await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
-
     await mergeChunksEfficiently(chunkFiles, finalPath);
-    console.log('Merge complete');
 
-    // Don't delete cached files, only temporary merge files
+    // Cleanup temp files
     const tempFiles = chunkFiles.filter(file => !file.includes('chunk-') && !file.includes('silence-'));
     for (const file of tempFiles) {
       if (fs.existsSync(file)) {
@@ -296,9 +289,8 @@ router.post('/generate-audio', async (req, res) => {
     const generationTime = (endTime - startTime) / 1000;
     console.log(`Total TTS generation time: ${generationTime} seconds`);
 
-    const audioUrl = `/audio/${finalFileName}`;
     return res.json({ 
-      audioUrl, 
+      audioUrl: `/audio/${finalFileName}`, 
       generationTime,
       chunksProcessed: blocks.length,
       cached: blocks.length - completedBlocks
@@ -383,48 +375,41 @@ router.post('/mix-with-music', async (req, res) => {
     ]);
 
     const ttsDuration = ttsMetadata.format.duration;
-    const totalSamples = Math.ceil(ttsDuration * ttsMetadata.streams[0].sample_rate);
-    console.log(`TTS duration: ${ttsDuration}s, Total samples: ${totalSamples}`);
+    console.log(`TTS duration: ${ttsDuration}s`);
 
     const outputFileName = `merged-${cacheKey}.mp3`;
     const outputPath = path.join(audioDir, outputFileName);
     const outputUrl = `/audio/${outputFileName}`;
 
-    await new Promise((resolve, reject) => {
-      let processedDuration = 0;
-      let lastProgress = 0;
+    // Create a temporary WAV file for faster processing
+    const tempWavPath = path.join(tempDir, `temp-${Date.now()}.wav`);
 
+    await new Promise((resolve, reject) => {
+      let lastProgress = 0;
+      
       ffmpeg()
         .input(ttsPath)
         .input(musicPath)
         .complexFilter([
-          // Process music first for better performance
-          `[1:a]atrim=0:${ttsDuration},aloop=0:${Math.ceil(ttsDuration)},volume=${musicVolume}[music]`,
-          // Process TTS
+          // Loop music to match TTS duration
+          `[1:a]aloop=loop=-1:size=${ttsDuration}[looped]`,
+          // Trim looped music to exact duration and adjust volume
+          `[looped]atrim=0:${ttsDuration},volume=${musicVolume}[music]`,
+          // Process TTS with volume
           `[0:a]volume=${ttsVolume}[tts]`,
-          // Mix using amerge and normalize
-          `[tts][music]amerge=inputs=2,dynaudnorm=p=0.95[out]`
+          // Mix using amerge (faster than amix)
+          `[tts][music]amerge=inputs=2[out]`
         ])
         .outputOptions([
           '-map [out]',
-          '-codec:a', 'libmp3lame',
-          '-qscale:a', '3',
-          '-threads', '4',
-          '-compression_level', '0'
+          '-ar', '44100',
+          '-ac', '2',
+          '-f', 'wav'
         ])
         .on('start', (cmd) => console.log('Started FFmpeg with command:', cmd))
         .on('progress', (progress) => {
-          if (progress.timemark) {
-            // Convert timemark to seconds
-            const parts = progress.timemark.split(':');
-            const seconds = parseInt(parts[0]) * 3600 + 
-                          parseInt(parts[1]) * 60 + 
-                          parseFloat(parts[2]);
-            
-            processedDuration = seconds;
-            const realProgress = Math.min(Math.round((processedDuration / ttsDuration) * 100), 100);
-            
-            // Only log if progress has increased by at least 1%
+          if (progress.percent) {
+            const realProgress = Math.min(Math.round(progress.percent), 100);
             if (realProgress > lastProgress) {
               lastProgress = realProgress;
               console.log(`Merge progress: ${realProgress}%`);
@@ -432,20 +417,42 @@ router.post('/mix-with-music', async (req, res) => {
           }
         })
         .on('end', () => {
-          console.log('Merge complete');
-          // Cache the result
-          mergeCache.set(cacheKey, {
-            path: outputPath,
-            url: outputUrl,
-            timestamp: Date.now()
-          });
-          resolve();
+          // Convert WAV to MP3 with high quality
+          ffmpeg(tempWavPath)
+            .outputOptions([
+              '-codec:a', 'libmp3lame',
+              '-qscale:a', '2',
+              '-ar', '44100',
+              '-ac', '2'
+            ])
+            .on('end', () => {
+              // Clean up temp WAV file
+              if (fs.existsSync(tempWavPath)) {
+                fs.unlinkSync(tempWavPath);
+              }
+              // Cache the result
+              mergeCache.set(cacheKey, {
+                path: outputPath,
+                url: outputUrl,
+                timestamp: Date.now()
+              });
+              resolve();
+            })
+            .on('error', (err) => {
+              if (fs.existsSync(tempWavPath)) {
+                fs.unlinkSync(tempWavPath);
+              }
+              reject(err);
+            })
+            .save(outputPath);
         })
         .on('error', (err) => {
-          console.error('FFmpeg error:', err);
+          if (fs.existsSync(tempWavPath)) {
+            fs.unlinkSync(tempWavPath);
+          }
           reject(new Error('FFmpeg processing failed: ' + err.message));
         })
-        .save(outputPath);
+        .save(tempWavPath);
     });
 
     const endTime = Date.now();
