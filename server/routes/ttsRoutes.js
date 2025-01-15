@@ -83,13 +83,15 @@ async function getOrCreateSilence(seconds) {
  */
 function parsePlaceholders(script) {
   const blocks = [];
-  const MAX_CHUNK_LENGTH = 4000; // OpenAI's limit is 4096
+  const MAX_CHUNK_LENGTH = 4000; // Keep max length close to OpenAI's limit
 
   // First, normalize the script to ensure consistent spacing
   const normalizedScript = script.replace(/\s+/g, ' ').trim();
   
   // Split by pause placeholders but keep them in the result
   const segments = normalizedScript.split(/(\{\{PAUSE_\d+s\}\})/);
+  
+  let currentChunk = '';
   
   for (let segment of segments) {
     segment = segment.trim();
@@ -98,36 +100,30 @@ function parsePlaceholders(script) {
     // Handle pause placeholders
     const pauseMatch = segment.match(/\{\{PAUSE_(\d+)s\}\}/);
     if (pauseMatch) {
+      // If we have accumulated text, push it as a chunk
+      if (currentChunk) {
+        blocks.push({ text: currentChunk, pause: 0 });
+        currentChunk = '';
+      }
       blocks.push({ text: '', pause: parseInt(pauseMatch[1], 10) });
       continue;
     }
 
-    // Split long text segments into smaller chunks at natural break points
-    let remainingText = segment;
-    while (remainingText.length > 0) {
-      let chunkLength = Math.min(remainingText.length, MAX_CHUNK_LENGTH);
-      
-      // Find a natural break point if we're splitting
-      if (chunkLength < remainingText.length) {
-        const lastPeriod = remainingText.lastIndexOf('.', chunkLength);
-        const lastComma = remainingText.lastIndexOf(',', chunkLength);
-        const breakPoint = Math.max(
-          lastPeriod !== -1 ? lastPeriod + 1 : -1,
-          lastComma !== -1 ? lastComma + 1 : -1
-        );
-        
-        if (breakPoint > 0) {
-          chunkLength = breakPoint;
-        }
+    // For text segments, try to accumulate until we reach the max length
+    if ((currentChunk + ' ' + segment).length <= MAX_CHUNK_LENGTH) {
+      currentChunk = currentChunk ? currentChunk + ' ' + segment : segment;
+    } else {
+      // If current chunk is not empty, push it
+      if (currentChunk) {
+        blocks.push({ text: currentChunk, pause: 0 });
       }
-
-      const chunk = remainingText.slice(0, chunkLength).trim();
-      if (chunk) {
-        blocks.push({ text: chunk, pause: 0 });
-      }
-
-      remainingText = remainingText.slice(chunkLength).trim();
+      currentChunk = segment;
     }
+  }
+
+  // Push any remaining chunk
+  if (currentChunk) {
+    blocks.push({ text: currentChunk, pause: 0 });
   }
 
   return blocks;
@@ -262,32 +258,45 @@ router.post('/generate-audio', async (req, res) => {
     const blocks = parsePlaceholders(text);
     console.log(`Split into ${blocks.length} blocks for processing`);
 
-    // Increase concurrency for faster processing
+    // Process blocks in larger batches with higher concurrency
     const chunkFiles = [];
-    const concurrencyLimit = 8; // Increased from 5 to 8 for faster processing
-    const batches = [];
+    const concurrencyLimit = 12; // Increased from 8 to 12
+    const batchSize = 15; // Process more blocks per batch
     
-    // Split blocks into batches
-    for (let i = 0; i < blocks.length; i += concurrencyLimit) {
-      batches.push(blocks.slice(i, i + concurrencyLimit));
+    // Group blocks into larger batches
+    const batches = [];
+    for (let i = 0; i < blocks.length; i += batchSize) {
+      batches.push(blocks.slice(i, i + batchSize));
     }
 
-    // Process batches with progress tracking
+    // Process batches with improved concurrency
     let completedBlocks = 0;
     for (const batch of batches) {
-      const batchResults = await Promise.all(
-        batch.map((block, index) => 
-          generateTTSForBlock(block, voice, model, completedBlocks + index)
-            .catch(error => {
-              console.error(`Error processing block ${completedBlocks + index}:`, error);
-              return null;
-            })
-        )
-      );
+      // Process each batch with higher concurrency
+      const batchPromises = [];
+      for (let i = 0; i < batch.length; i += concurrencyLimit) {
+        const concurrent = batch.slice(i, i + concurrencyLimit);
+        batchPromises.push(
+          Promise.all(
+            concurrent.map((block, index) =>
+              generateTTSForBlock(block, voice, model, completedBlocks + index)
+                .catch(error => {
+                  console.error(`Error processing block ${completedBlocks + index}:`, error);
+                  return null;
+                })
+            )
+          )
+        );
+      }
+
+      // Wait for all concurrent operations in this batch
+      const batchResults = await Promise.all(batchPromises);
+      const validFiles = batchResults.flat().filter(file => file !== null);
+      chunkFiles.push(...validFiles);
       
-      chunkFiles.push(...batchResults.filter(file => file !== null));
       completedBlocks += batch.length;
-      console.log(`Progress: ${Math.round((completedBlocks / blocks.length) * 100)}% (${completedBlocks}/${blocks.length} blocks)`);
+      const progress = Math.round((completedBlocks / blocks.length) * 100);
+      console.log(`Progress: ${progress}% (${completedBlocks}/${blocks.length} blocks)`);
     }
 
     if (chunkFiles.length === 0) {
