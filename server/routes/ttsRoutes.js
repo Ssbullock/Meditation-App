@@ -383,82 +383,69 @@ router.post('/mix-with-music', async (req, res) => {
     ]);
 
     const ttsDuration = ttsMetadata.format.duration;
-    console.log(`TTS duration: ${ttsDuration}s`);
+    const totalSamples = Math.ceil(ttsDuration * ttsMetadata.streams[0].sample_rate);
+    console.log(`TTS duration: ${ttsDuration}s, Total samples: ${totalSamples}`);
 
     const outputFileName = `merged-${cacheKey}.mp3`;
     const outputPath = path.join(audioDir, outputFileName);
     const outputUrl = `/audio/${outputFileName}`;
 
     await new Promise((resolve, reject) => {
-      let totalFrames = 0;
-      let processedFrames = 0;
+      let processedDuration = 0;
       let lastProgress = 0;
-      let mergeStarted = false;
 
-      // First pass to get total frames
-      ffmpeg(ttsPath)
-        .ffprobe((err, data) => {
-          if (err) {
-            reject(err);
-            return;
-          }
-          totalFrames = Math.ceil(data.streams[0].duration * data.streams[0].sample_rate);
-          mergeStarted = true;
-          startMerge();
-        });
-
-      function startMerge() {
-        ffmpeg()
-          .input(ttsPath)
-          .input(musicPath)
-          .complexFilter([
-            // Process music first for better performance
-            `[1:a]atrim=0:${ttsDuration},aloop=0:${Math.ceil(ttsDuration)},volume=${musicVolume}[music]`,
-            // Process TTS
-            `[0:a]volume=${ttsVolume}[tts]`,
-            // Mix using amerge and normalize
-            `[tts][music]amerge=inputs=2,dynaudnorm[out]`
-          ])
-          .outputOptions([
-            '-map [out]',
-            '-codec:a', 'libmp3lame',
-            '-qscale:a', '3',
-            '-threads', '4',
-            '-compression_level', '0',
-            '-application_name', 'audio_merge'
-          ])
-          .on('start', (cmd) => console.log('Started FFmpeg with command:', cmd))
-          .on('progress', (progress) => {
-            if (!mergeStarted) return;
-
-            // Calculate real progress based on processed frames
-            if (progress.frames) {
-              processedFrames = progress.frames;
-              const realProgress = Math.min(Math.round((processedFrames / totalFrames) * 100), 100);
-              
-              // Only log if progress has increased by at least 1%
-              if (realProgress > lastProgress) {
-                lastProgress = realProgress;
-                console.log(`Real merge progress: ${realProgress}%`);
-              }
+      ffmpeg()
+        .input(ttsPath)
+        .input(musicPath)
+        .complexFilter([
+          // Process music first for better performance
+          `[1:a]atrim=0:${ttsDuration},aloop=0:${Math.ceil(ttsDuration)},volume=${musicVolume}[music]`,
+          // Process TTS
+          `[0:a]volume=${ttsVolume}[tts]`,
+          // Mix using amerge and normalize
+          `[tts][music]amerge=inputs=2,dynaudnorm=p=0.95[out]`
+        ])
+        .outputOptions([
+          '-map [out]',
+          '-codec:a', 'libmp3lame',
+          '-qscale:a', '3',
+          '-threads', '4',
+          '-compression_level', '0'
+        ])
+        .on('start', (cmd) => console.log('Started FFmpeg with command:', cmd))
+        .on('progress', (progress) => {
+          if (progress.timemark) {
+            // Convert timemark to seconds
+            const parts = progress.timemark.split(':');
+            const seconds = parseInt(parts[0]) * 3600 + 
+                          parseInt(parts[1]) * 60 + 
+                          parseFloat(parts[2]);
+            
+            processedDuration = seconds;
+            const realProgress = Math.min(Math.round((processedDuration / ttsDuration) * 100), 100);
+            
+            // Only log if progress has increased by at least 1%
+            if (realProgress > lastProgress) {
+              lastProgress = realProgress;
+              console.log(`Merge progress: ${realProgress}%`);
             }
-          })
-          .on('end', () => {
-            console.log('Merge complete');
-            // Cache the result
-            mergeCache.set(cacheKey, {
-              path: outputPath,
-              url: outputUrl,
-              timestamp: Date.now()
-            });
-            resolve();
-          })
-          .on('error', (err) => {
-            console.error('FFmpeg error:', err);
-            reject(new Error('FFmpeg processing failed: ' + err.message));
-          })
-          .save(outputPath);
-      }
+          }
+        })
+        .on('end', () => {
+          console.log('Merge complete');
+          // Cache the result
+          mergeCache.set(cacheKey, {
+            path: outputPath,
+            url: outputUrl,
+            timestamp: Date.now()
+          });
+          resolve();
+        })
+        .on('error', (err) => {
+          console.error('FFmpeg error:', err);
+          reject(new Error('FFmpeg processing failed: ' + err.message));
+        })
+        .save(outputPath);
     });
 
     const endTime = Date.now();
