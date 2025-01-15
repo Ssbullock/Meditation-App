@@ -389,7 +389,12 @@ router.post('/mix-with-music', async (req, res) => {
     const outputPath = path.join(audioDir, outputFileName);
     const outputUrl = `/audio/${outputFileName}`;
 
+    // Create a temporary WAV file for faster processing
+    const tempWavPath = path.join(tempDir, `temp-${Date.now()}.wav`);
+
     await new Promise((resolve, reject) => {
+      let lastProgress = 0;
+      
       ffmpeg()
         .input(ttsPath)
         .inputOptions(['-y']) // Overwrite output files
@@ -399,38 +404,63 @@ router.post('/mix-with-music', async (req, res) => {
           `[1:a]atrim=0:${ttsDuration},aloop=0:${Math.ceil(ttsDuration)},volume=${musicVolume}[music]`,
           // Adjust TTS volume
           `[0:a]volume=${ttsVolume}[tts]`,
-          // Mix TTS with music
-          `[tts][music]amix=inputs=2:duration=first[out]`
+          // Mix TTS with music using amerge instead of amix for better performance
+          `[tts][music]amerge=inputs=2[out]`
         ])
         .outputOptions([
           '-map [out]',
-          '-codec:a libmp3lame',
-          '-qscale:a 2', // High quality, fast encoding
+          '-threads 4', // Use multiple threads
+          '-preset ultrafast', // Fastest encoding
           '-ac 2', // Stereo output
           '-ar 44100', // Standard sample rate
-          '-movflags +faststart' // Enable streaming
+          '-f wav' // Output to WAV first for speed
         ])
         .on('start', (cmd) => console.log('Started FFmpeg with command:', cmd))
         .on('progress', (progress) => {
-          if (progress.percent) {
-            console.log(`Merge progress: ${Math.round(progress.percent)}%`);
+          // Ensure progress never exceeds 100%
+          const currentProgress = Math.min(Math.round(progress.percent || 0), 100);
+          if (currentProgress > lastProgress) {
+            lastProgress = currentProgress;
+            console.log(`Merge progress: ${currentProgress}%`);
           }
         })
         .on('end', () => {
-          console.log('Merge complete');
-          // Cache the result
-          mergeCache.set(cacheKey, {
-            path: outputPath,
-            url: outputUrl,
-            timestamp: Date.now()
-          });
-          resolve();
+          // Convert WAV to MP3 with high quality
+          ffmpeg(tempWavPath)
+            .outputOptions([
+              '-codec:a', 'libmp3lame',
+              '-qscale:a', '2', // High quality
+              '-threads', '4',
+              '-movflags', '+faststart'
+            ])
+            .on('end', () => {
+              // Clean up temp WAV file
+              if (fs.existsSync(tempWavPath)) {
+                fs.unlinkSync(tempWavPath);
+              }
+              // Cache the result
+              mergeCache.set(cacheKey, {
+                path: outputPath,
+                url: outputUrl,
+                timestamp: Date.now()
+              });
+              resolve();
+            })
+            .on('error', (err) => {
+              if (fs.existsSync(tempWavPath)) {
+                fs.unlinkSync(tempWavPath);
+              }
+              reject(err);
+            })
+            .save(outputPath);
         })
         .on('error', (err) => {
-          console.error('FFmpeg error:', err);
+          if (fs.existsSync(tempWavPath)) {
+            fs.unlinkSync(tempWavPath);
+          }
           reject(new Error('FFmpeg processing failed: ' + err.message));
         })
-        .save(outputPath);
+        .save(tempWavPath);
     });
 
     const endTime = Date.now();

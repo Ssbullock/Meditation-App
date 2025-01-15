@@ -66,6 +66,10 @@ function CreateMeditation() {
   const [ttsGenerationTime, setTtsGenerationTime] = useState(null);
   const [generatingTTS, setGeneratingTTS] = useState(false);
 
+  // Add new state variables for merge timing
+  const [mergeTime, setMergeTime] = useState(null);
+  const [isMerging, setIsMerging] = useState(false);
+
   const navigate = useNavigate();
 
   // Fetch music list on mount
@@ -199,6 +203,14 @@ function CreateMeditation() {
       return;
     }
     setLoadingMerge(true);
+    setIsMerging(true);
+    setMergeTime(0);
+    
+    const startTime = Date.now();
+    const timerInterval = setInterval(() => {
+      setMergeTime(Math.round((Date.now() - startTime) / 100) / 10);
+    }, 100);
+
     try {
       const res = await api.post('/api/tts/mix-with-music', {
         ttsUrl: ttsAudioUrl,
@@ -207,16 +219,21 @@ function CreateMeditation() {
         ttsVolume: parseFloat(ttsVolume)
       });
       
+      clearInterval(timerInterval);
+      
       if (!res.data || !res.data.mixedAudioUrl) {
         throw new Error('Invalid response from merge service');
       }
       
       setMergedAudioUrl(res.data.mixedAudioUrl);
+      setMergeTime(res.data.mergeTime || Math.round((Date.now() - startTime) / 100) / 10);
     } catch (error) {
+      clearInterval(timerInterval);
       console.error('Error mixing audio:', error);
       alert('Failed to merge audio: ' + (error.response?.data?.error || error.message));
     } finally {
       setLoadingMerge(false);
+      setIsMerging(false);
     }
   };
 
@@ -533,22 +550,33 @@ function CreateMeditation() {
                   value={musicVolume}
                   onChange={(e) => setMusicVolume(e.target.value)}
                 />
-                <button 
-                  style={{
-                    ...styles.mainButton,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }} 
-                  onClick={handleMergeWithMusic} 
-                  disabled={loadingMerge}
-                >
-                  {loadingMerge ? (
-                    <div style={styles.spinner} />
-                  ) : (
-                    'Merge with Music'
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  <button 
+                    style={{
+                      ...styles.mainButton,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }} 
+                    onClick={handleMergeWithMusic} 
+                    disabled={loadingMerge}
+                  >
+                    {loadingMerge ? (
+                      <div style={styles.spinner} />
+                    ) : (
+                      'Merge with Music'
+                    )}
+                  </button>
+                  {(isMerging || mergeTime !== null) && (
+                    <span style={{ 
+                      color: '#4a5568',
+                      fontSize: '0.9rem',
+                      fontFamily: 'monospace'
+                    }}>
+                      {isMerging ? `${mergeTime}s...` : `Merged in ${mergeTime}s`}
+                    </span>
                   )}
-                </button>
+                </div>
               </div>
             )}
           </div>
