@@ -192,28 +192,52 @@ async function mergeChunksEfficiently(files, outputPath) {
     return;
   }
 
-  // Create a temporary file list for concat
+  // Create a temporary WAV file for intermediate processing
+  const tempWavPath = path.join(tempDir, `temp-${Date.now()}.wav`);
   const listPath = path.join(tempDir, `list-${Date.now()}.txt`);
   const fileContent = files.map(f => `file '${f}'`).join('\n');
   await fs.promises.writeFile(listPath, fileContent);
 
   try {
+    // First merge to WAV for better quality
     await new Promise((resolve, reject) => {
       ffmpeg()
         .input(listPath)
         .inputOptions(['-f', 'concat', '-safe', '0'])
         .outputOptions([
-          '-c:a', 'copy', // Use copy codec for faster processing
-          '-movflags', '+faststart' // Enable fast start for streaming
+          '-acodec', 'pcm_s16le',
+          '-ar', '44100',
+          '-ac', '2',
+          '-f', 'wav'
         ])
-        .on('end', resolve)
         .on('error', reject)
+        .on('end', resolve)
+        .save(tempWavPath);
+    });
+
+    // Then convert to MP3 with high quality settings
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(tempWavPath)
+        .outputOptions([
+          '-codec:a', 'libmp3lame',
+          '-qscale:a', '2',
+          '-ar', '44100',
+          '-ac', '2',
+          '-id3v2_version', '3',
+          '-write_xing', '1'
+        ])
+        .on('error', reject)
+        .on('end', resolve)
         .save(outputPath);
     });
   } finally {
-    // Clean up the temporary list file
+    // Clean up temporary files
     if (fs.existsSync(listPath)) {
       fs.unlinkSync(listPath);
+    }
+    if (fs.existsSync(tempWavPath)) {
+      fs.unlinkSync(tempWavPath);
     }
   }
 }
@@ -381,7 +405,7 @@ router.post('/mix-with-music', async (req, res) => {
     const outputPath = path.join(audioDir, outputFileName);
     const outputUrl = `/audio/${outputFileName}`;
 
-    // Create a temporary WAV file for faster processing
+    // Create a temporary WAV file for intermediate processing
     const tempWavPath = path.join(tempDir, `temp-${Date.now()}.wav`);
 
     await new Promise((resolve, reject) => {
@@ -391,20 +415,16 @@ router.post('/mix-with-music', async (req, res) => {
         .input(ttsPath)
         .input(musicPath)
         .complexFilter([
-          // Loop music to match TTS duration
           `[1:a]aloop=loop=-1:size=${ttsDuration}[looped]`,
-          // Trim looped music to exact duration and adjust volume
           `[looped]atrim=0:${ttsDuration},volume=${musicVolume}[music]`,
-          // Process TTS with volume
           `[0:a]volume=${ttsVolume}[tts]`,
-          // Mix using amerge (faster than amix)
           `[tts][music]amerge=inputs=2[out]`
         ])
         .outputOptions([
-          '-map [out]',
+          '-map', '[out]',
+          '-acodec', 'pcm_s16le',
           '-ar', '44100',
-          '-ac', '2',
-          '-f', 'wav'
+          '-ac', '2'
         ])
         .on('start', (cmd) => console.log('Started FFmpeg with command:', cmd))
         .on('progress', (progress) => {
@@ -416,21 +436,22 @@ router.post('/mix-with-music', async (req, res) => {
             }
           }
         })
+        .on('error', reject)
         .on('end', () => {
-          // Convert WAV to MP3 with high quality
+          // Convert WAV to MP3 with high quality settings
           ffmpeg(tempWavPath)
             .outputOptions([
               '-codec:a', 'libmp3lame',
               '-qscale:a', '2',
               '-ar', '44100',
-              '-ac', '2'
+              '-ac', '2',
+              '-id3v2_version', '3',
+              '-write_xing', '1'
             ])
             .on('end', () => {
-              // Clean up temp WAV file
               if (fs.existsSync(tempWavPath)) {
                 fs.unlinkSync(tempWavPath);
               }
-              // Cache the result
               mergeCache.set(cacheKey, {
                 path: outputPath,
                 url: outputUrl,
@@ -445,12 +466,6 @@ router.post('/mix-with-music', async (req, res) => {
               reject(err);
             })
             .save(outputPath);
-        })
-        .on('error', (err) => {
-          if (fs.existsSync(tempWavPath)) {
-            fs.unlinkSync(tempWavPath);
-          }
-          reject(new Error('FFmpeg processing failed: ' + err.message));
         })
         .save(tempWavPath);
     });

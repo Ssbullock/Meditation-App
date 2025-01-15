@@ -310,9 +310,19 @@ function CreateMeditation() {
     }
   };
 
-  const handleAudioError = (e) => {
-    console.error('Audio playback error:', e);
-    alert('Error playing audio file. Please try again.');
+  const handleAudioError = (error) => {
+    console.error('Audio playback error:', error);
+    // Attempt to reload the audio
+    const audioElement = error.target;
+    if (audioElement) {
+      audioElement.load();
+      // Add a small delay before trying to play again
+      setTimeout(() => {
+        audioElement.play().catch(e => 
+          console.error('Retry playback failed:', e)
+        );
+      }, 1000);
+    }
   };
 
   return (
