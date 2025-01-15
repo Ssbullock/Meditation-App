@@ -313,59 +313,154 @@ router.post('/generate-audio', async (req, res) => {
   }
 });
 
+// Add merge cache
+const mergeCache = new Map();
+const MERGE_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
+// Add merge cache cleanup interval
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of mergeCache.entries()) {
+    if (now - value.timestamp > MERGE_CACHE_DURATION) {
+      if (fs.existsSync(value.path)) {
+        fs.unlinkSync(value.path);
+      }
+      mergeCache.delete(key);
+    }
+  }
+}, MERGE_CACHE_DURATION);
+
+function generateMergeCacheKey(ttsUrl, musicUrl, volume) {
+  const data = `${ttsUrl}-${musicUrl}-${volume}`;
+  return crypto.createHash('md5').update(data).digest('hex');
+}
+
 /**
  * POST /api/tts/mix-with-music
- * Body: { ttsUrl: string, musicUrl: string, volume: number }
+ * Body: { ttsUrl: string, musicUrl: string, ttsVolume: number, musicVolume: number }
  * merges final TTS file with background music
  */
-router.post('/mix-with-music', (req, res) => {
-  const { ttsUrl, musicUrl, volume = 0.3 } = req.body;
-  if (!ttsUrl || !musicUrl) {
-    return res.status(400).json({ error: 'Missing ttsUrl or musicUrl' });
-  }
-
-  const ttsPath = path.join(__dirname, '../public', ttsUrl);
-  const musicPath = path.join(__dirname, '../public', musicUrl);
-
-  if (!fs.existsSync(ttsPath) || !fs.existsSync(musicPath)) {
-    return res.status(404).json({ error: 'Audio file not found' });
-  }
-
-  const outputFileName = `merged-${Date.now()}.mp3`;
-  const outputPath = path.join(__dirname, '../public/audio', outputFileName);
-
-  // First, get the duration of the TTS file
-  ffmpeg.ffprobe(ttsPath, (err, metadata) => {
-    if (err) {
-      console.error('Error getting TTS duration:', err);
-      return res.status(500).json({ error: 'Failed to process audio' });
+router.post('/mix-with-music', async (req, res) => {
+  const startTime = Date.now();
+  const { ttsUrl, musicUrl, musicVolume = 0.3, ttsVolume = 1.0 } = req.body;
+  
+  try {
+    if (!ttsUrl || !musicUrl) {
+      return res.status(400).json({ error: 'Missing ttsUrl or musicUrl' });
     }
 
-    const ttsDuration = metadata.format.duration;
+    console.log('Starting audio merge with:', {
+      ttsUrl,
+      musicUrl,
+      musicVolume,
+      ttsVolume
+    });
 
-    ffmpeg()
-      .input(ttsPath)
-      .input(musicPath)
-      .complexFilter([
-        // Trim music to match TTS length and adjust volume
-        `[1:a]atrim=0:${ttsDuration},aloop=0:${Math.ceil(ttsDuration)},volume=${volume}[music]`,
-        // Mix TTS with music
-        `[0:a][music]amix=inputs=2:duration=first[out]`
-      ])
-      .outputOptions('-map [out]')
-      .audioCodec('libmp3lame')
-      .audioBitrate('192k')
-      .on('end', () => {
-        const mergedUrl = `/audio/${outputFileName}`;
-        return res.json({ mixedAudioUrl: mergedUrl });
-      })
-      .on('error', (err) => {
-        console.error('FFmpeg error:', err);
-        return res.status(500).json({ error: 'FFmpeg processing failed' });
-      })
-      .saveToFile(outputPath);
-  });
+    const ttsPath = path.join(__dirname, '../public', ttsUrl);
+    const musicPath = path.join(__dirname, '../public', musicUrl);
+
+    if (!fs.existsSync(ttsPath) || !fs.existsSync(musicPath)) {
+      return res.status(404).json({ error: 'Audio file not found' });
+    }
+
+    // Check cache first
+    const cacheKey = generateMergeCacheKey(ttsUrl, musicUrl, musicVolume);
+    const cachedMerge = mergeCache.get(cacheKey);
+    if (cachedMerge && fs.existsSync(cachedMerge.path)) {
+      console.log('Using cached merged audio');
+      const endTime = Date.now();
+      return res.json({ 
+        mixedAudioUrl: cachedMerge.url,
+        mergeTime: (endTime - startTime) / 1000,
+        cached: true
+      });
+    }
+
+    // Get the duration of both files in parallel
+    const [ttsMetadata, musicMetadata] = await Promise.all([
+      getAudioMetadata(ttsPath),
+      getAudioMetadata(musicPath)
+    ]);
+
+    const ttsDuration = ttsMetadata.format.duration;
+    console.log(`TTS duration: ${ttsDuration}s`);
+
+    const outputFileName = `merged-${cacheKey}.mp3`;
+    const outputPath = path.join(audioDir, outputFileName);
+    const outputUrl = `/audio/${outputFileName}`;
+
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(ttsPath)
+        .inputOptions(['-y']) // Overwrite output files
+        .input(musicPath)
+        .complexFilter([
+          // Trim music to match TTS length and adjust volume
+          `[1:a]atrim=0:${ttsDuration},aloop=0:${Math.ceil(ttsDuration)},volume=${musicVolume}[music]`,
+          // Adjust TTS volume
+          `[0:a]volume=${ttsVolume}[tts]`,
+          // Mix TTS with music
+          `[tts][music]amix=inputs=2:duration=first[out]`
+        ])
+        .outputOptions([
+          '-map [out]',
+          '-codec:a libmp3lame',
+          '-qscale:a 2', // High quality, fast encoding
+          '-ac 2', // Stereo output
+          '-ar 44100', // Standard sample rate
+          '-movflags +faststart' // Enable streaming
+        ])
+        .on('start', (cmd) => console.log('Started FFmpeg with command:', cmd))
+        .on('progress', (progress) => {
+          if (progress.percent) {
+            console.log(`Merge progress: ${Math.round(progress.percent)}%`);
+          }
+        })
+        .on('end', () => {
+          console.log('Merge complete');
+          // Cache the result
+          mergeCache.set(cacheKey, {
+            path: outputPath,
+            url: outputUrl,
+            timestamp: Date.now()
+          });
+          resolve();
+        })
+        .on('error', (err) => {
+          console.error('FFmpeg error:', err);
+          reject(new Error('FFmpeg processing failed: ' + err.message));
+        })
+        .save(outputPath);
+    });
+
+    const endTime = Date.now();
+    const mergeTime = (endTime - startTime) / 1000;
+    console.log(`Total merge time: ${mergeTime} seconds`);
+
+    return res.json({ 
+      mixedAudioUrl: outputUrl,
+      mergeTime,
+      cached: false
+    });
+
+  } catch (error) {
+    console.error('Error merging audio:', error);
+    return res.status(500).json({ 
+      error: 'Failed to merge audio',
+      details: error.message
+    });
+  }
 });
+
+// Helper function to get audio metadata
+function getAudioMetadata(filePath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) reject(err);
+      else resolve(metadata);
+    });
+  });
+}
 
 async function generateSilence(seconds, outputPath) {
   return new Promise((resolve, reject) => {
