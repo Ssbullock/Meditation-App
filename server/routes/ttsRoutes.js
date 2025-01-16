@@ -7,6 +7,14 @@ import ffmpeg from 'fluent-ffmpeg';
 import OpenAI from 'openai';
 import { mkdir } from 'fs/promises';
 import crypto from 'crypto';
+import rateLimit from 'express-rate-limit';
+import compression from 'compression';
+import { debounce } from 'lodash';
+import { createReadStream } from 'fs';
+import { AudioStreamMixer } from 'audio-stream-mixer';
+import Redis from 'ioredis';
+import { Worker } from 'worker_threads';
+import Queue from 'bull';
 
 const router = Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -117,171 +125,117 @@ function parsePlaceholders(script) {
   return blocks;
 }
 
+// Example Redis implementation
+const redis = new Redis(process.env.REDIS_URL);
+
 /**
  * Helper to generate TTS for a single block with caching
  */
 async function generateTTSForBlock(block, voice, model, index) {
-  // Handle pause blocks more efficiently
-  if (!block.text && block.pause > 0) {
-    return await getOrCreateSilence(block.pause);
+  try {
+    // Handle pause blocks efficiently
+    if (!block.text && block.pause > 0) {
+      return await getOrCreateSilence(block.pause);
+    }
+
+    if (!block.text) return null;
+
+    // Generate cache key
+    const cacheKey = `tts:${generateChunkCacheKey(block.text, voice, model)}`;
+    
+    // Try Redis cache first
+    const cachedPath = await redis.get(cacheKey);
+    if (cachedPath && fs.existsSync(cachedPath)) {
+      return cachedPath;
+    }
+
+    // Generate TTS for text block
+    const mp3Response = await openai.audio.speech.create({
+      model,
+      voice,
+      input: block.text,
+    });
+
+    if (!mp3Response) {
+      throw new Error('No response from OpenAI TTS API');
+    }
+
+    const buffer = Buffer.from(await mp3Response.arrayBuffer());
+    const outFile = `chunk-${generateChunkCacheKey(block.text, voice, model)}.mp3`;
+    const outPath = path.join(tempDir, outFile);
+    await fs.promises.writeFile(outPath, buffer);
+    
+    // Cache the result in Redis
+    await redis.set(cacheKey, outPath, 'EX', 86400); // 24h expiry
+    
+    return outPath;
+  } catch (error) {
+    console.error(`Error generating TTS for block ${index}:`, error);
+    return null;
   }
-
-  if (!block.text) return null;
-
-  // Check cache first
-  const cacheKey = generateChunkCacheKey(block.text, voice, model);
-  const cachedChunk = audioChunkCache.get(cacheKey);
-  if (cachedChunk && fs.existsSync(cachedChunk.path)) {
-    return cachedChunk.path;
-  }
-
-  // Generate TTS for text block
-  const mp3Response = await openai.audio.speech.create({
-    model,
-    voice,
-    input: block.text,
-  });
-
-  if (!mp3Response) {
-    throw new Error('No response from OpenAI TTS API');
-  }
-
-  const buffer = Buffer.from(await mp3Response.arrayBuffer());
-  const outFile = `chunk-${cacheKey}.mp3`;
-  const outPath = path.join(tempDir, outFile);
-  await fs.promises.writeFile(outPath, buffer);
-  
-  // Cache the chunk
-  audioChunkCache.set(cacheKey, {
-    path: outPath,
-    timestamp: Date.now()
-  });
-  
-  return outPath;
 }
 
 /**
  * Helper to merge chunks more efficiently using FFmpeg concat demuxer
  */
 async function mergeChunksEfficiently(files, outputPath) {
-  if (files.length === 0) {
-    throw new Error('No files to merge');
-  }
-
-  // If there's only one file, just copy it
-  if (files.length === 1) {
-    await fs.promises.copyFile(files[0], outputPath);
-    return;
-  }
-
-  // Create a temporary WAV file for intermediate processing
-  const tempWavPath = path.join(tempDir, `temp-${Date.now()}.wav`);
-  const listPath = path.join(tempDir, `list-${Date.now()}.txt`);
-  const fileContent = files.map(f => `file '${f}'`).join('\n');
-  await fs.promises.writeFile(listPath, fileContent);
-
-  try {
-    // First merge to WAV for better quality
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(listPath)
-        .inputOptions(['-f', 'concat', '-safe', '0'])
-        .outputOptions([
-          '-acodec', 'pcm_s16le',
-          '-ar', '44100',
-          '-ac', '2',
-          '-f', 'wav'
-        ])
-        .on('error', reject)
-        .on('end', resolve)
-        .save(tempWavPath);
+  const ffmpeg = require('fluent-ffmpeg');
+  
+  return new Promise((resolve, reject) => {
+    let command = ffmpeg();
+    
+    // Stream inputs directly
+    files.forEach(file => {
+      command = command.input(file);
     });
 
-    // Then convert to MP3 with high quality settings
-    await new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(tempWavPath)
-        .outputOptions([
-          '-codec:a', 'libmp3lame',
-          '-qscale:a', '2',
-          '-ar', '44100',
-          '-ac', '2',
-          '-id3v2_version', '3',
-          '-write_xing', '1'
-        ])
-        .on('error', reject)
-        .on('end', resolve)
-        .save(outputPath);
-    });
-  } finally {
-    // Clean up temporary files
-    if (fs.existsSync(listPath)) {
-      fs.unlinkSync(listPath);
-    }
-    if (fs.existsSync(tempWavPath)) {
-      fs.unlinkSync(tempWavPath);
-    }
-  }
+    command
+      .complexFilter([
+        // Optimize filter graph
+        files.map((_, i) => `[${i}:a]`).join('') + 
+        `concat=n=${files.length}:v=0:a=1[out]`
+      ])
+      .outputOptions([
+        '-map', '[out]',
+        '-c:a', 'libmp3lame',
+        '-q:a', '2',
+        '-movflags', '+faststart'
+      ])
+      .on('progress', progress => {
+        // Report progress
+      })
+      .save(outputPath);
+  });
 }
+
+const audioQueue = new Queue('audio-processing');
 
 /**
  * POST /api/tts/generate-audio
  */
 router.post('/generate-audio', async (req, res) => {
-  const startTime = Date.now();
-  try {
-    const { text, voice = 'alloy', model = 'tts-1' } = req.body;
-    if (!text) return res.status(400).json({ error: 'No text provided' });
+  const job = await audioQueue.add({
+    text: req.body.text,
+    voice: req.body.voice,
+    model: req.body.model
+  });
 
-    const blocks = parsePlaceholders(text);
-    console.log(`Processing ${blocks.length} blocks...`);
+  // Return job ID immediately
+  res.json({ jobId: job.id });
+});
 
-    // Process all blocks with maximum concurrency
-    const MAX_CONCURRENT = 100; // Significantly increased concurrency
-    const chunkFiles = [];
-    
-    // Process in larger batches
-    for (let i = 0; i < blocks.length; i += MAX_CONCURRENT) {
-      const batch = blocks.slice(i, Math.min(i + MAX_CONCURRENT, blocks.length));
-      
-      const results = await Promise.all(
-        batch.map(block => generateTTSForBlock(block, voice, model, i))
-      );
+// Worker process
+audioQueue.process(async (job) => {
+  const blocks = parsePlaceholders(job.data.text);
+  const OPTIMAL_BATCH_SIZE = determineOptimalBatchSize(blocks.length);
+  
+  const workers = new Array(4).fill(null).map(() => 
+    new Worker('./audioWorker.js')
+  );
 
-      chunkFiles.push(...results.filter(Boolean));
-      console.log(`Progress: ${Math.round(((i + batch.length) / blocks.length) * 100)}%`);
-    }
-
-    if (!chunkFiles.length) throw new Error('No audio chunks were generated');
-
-    // Merge chunks
-    const finalFileName = `meditation-${Date.now()}.mp3`;
-    const finalPath = path.join(audioDir, finalFileName);
-    await mergeChunksEfficiently(chunkFiles, finalPath);
-
-    // Cleanup temp files in background
-    setImmediate(() => {
-      const tempFiles = chunkFiles.filter(file => 
-        file && !file.includes('chunk-') && !file.includes('silence-')
-      );
-      for (const file of tempFiles) {
-        if (fs.existsSync(file)) fs.unlinkSync(file);
-      }
-    });
-
-    const generationTime = (Date.now() - startTime) / 1000;
-    console.log(`Generated in ${generationTime}s`);
-
-    return res.json({ 
-      audioUrl: `/audio/${finalFileName}`, 
-      generationTime,
-      chunksProcessed: blocks.length,
-      cached: blocks.length - chunkFiles.length
-    });
-  } catch (error) {
-    console.error('Error generating TTS audio:', error);
-    return res.status(500).json({ error: 'Failed to generate audio', details: error.message });
-  }
+  // Distribute work across workers
+  const results = await processBlocksWithWorkers(blocks, workers);
+  return await mergeResults(results);
 });
 
 // Add merge cache
@@ -320,13 +274,6 @@ router.post('/mix-with-music', async (req, res) => {
       return res.status(400).json({ error: 'Missing ttsUrl or musicUrl' });
     }
 
-    console.log('Starting audio merge with:', {
-      ttsUrl,
-      musicUrl,
-      musicVolume,
-      ttsVolume
-    });
-
     const ttsPath = path.join(__dirname, '../public', ttsUrl);
     const musicPath = path.join(__dirname, '../public', musicUrl);
 
@@ -338,106 +285,55 @@ router.post('/mix-with-music', async (req, res) => {
     const cacheKey = generateMergeCacheKey(ttsUrl, musicUrl, musicVolume);
     const cachedMerge = mergeCache.get(cacheKey);
     if (cachedMerge && fs.existsSync(cachedMerge.path)) {
-      console.log('Using cached merged audio');
-      const endTime = Date.now();
       return res.json({ 
         mixedAudioUrl: cachedMerge.url,
-        mergeTime: (endTime - startTime) / 1000,
+        mergeTime: (Date.now() - startTime) / 1000,
         cached: true
       });
     }
 
-    // Get the duration of both files in parallel
-    const [ttsMetadata, musicMetadata] = await Promise.all([
-      getAudioMetadata(ttsPath),
-      getAudioMetadata(musicPath)
-    ]);
-
-    const ttsDuration = ttsMetadata.format.duration;
-    console.log(`TTS duration: ${ttsDuration}s`);
+    const streamMixer = new AudioStreamMixer({
+      ttsStream: createReadStream(ttsPath),
+      musicStream: createReadStream(musicPath),
+      outputFormat: 'mp3',
+      useHardwareAcceleration: true,
+      ttsVolume,
+      musicVolume
+    });
 
     const outputFileName = `merged-${cacheKey}.mp3`;
     const outputPath = path.join(audioDir, outputFileName);
     const outputUrl = `/audio/${outputFileName}`;
 
-    // Create a temporary WAV file for intermediate processing
-    const tempWavPath = path.join(tempDir, `temp-${Date.now()}.wav`);
+    // Stream to file and cache the result
+    const writeStream = fs.createWriteStream(outputPath);
+    streamMixer.pipe(writeStream);
 
-    await new Promise((resolve, reject) => {
-      let lastProgress = 0;
-      
-      ffmpeg()
-        .input(ttsPath)
-        .input(musicPath)
-        .complexFilter([
-          `[1:a]aloop=loop=-1:size=${ttsDuration}[looped]`,
-          `[looped]atrim=0:${ttsDuration},volume=${musicVolume}[music]`,
-          `[0:a]volume=${ttsVolume}[tts]`,
-          `[tts][music]amerge=inputs=2[out]`
-        ])
-        .outputOptions([
-          '-map', '[out]',
-          '-acodec', 'pcm_s16le',
-          '-ar', '44100',
-          '-ac', '2'
-        ])
-        .on('start', (cmd) => console.log('Started FFmpeg with command:', cmd))
-        .on('progress', (progress) => {
-          if (progress.percent) {
-            const realProgress = Math.min(Math.round(progress.percent), 100);
-            if (realProgress > lastProgress) {
-              lastProgress = realProgress;
-              console.log(`Merge progress: ${realProgress}%`);
-            }
-          }
-        })
-        .on('error', reject)
-        .on('end', () => {
-          // Convert WAV to MP3 with high quality settings
-          ffmpeg(tempWavPath)
-            .outputOptions([
-              '-codec:a', 'libmp3lame',
-              '-qscale:a', '2',
-              '-ar', '44100',
-              '-ac', '2',
-              '-id3v2_version', '3',
-              '-write_xing', '1'
-            ])
-            .on('end', () => {
-              if (fs.existsSync(tempWavPath)) {
-                fs.unlinkSync(tempWavPath);
-              }
-              mergeCache.set(cacheKey, {
-                path: outputPath,
-                url: outputUrl,
-                timestamp: Date.now()
-              });
-              resolve();
-            })
-            .on('error', (err) => {
-              if (fs.existsSync(tempWavPath)) {
-                fs.unlinkSync(tempWavPath);
-              }
-              reject(err);
-            })
-            .save(outputPath);
-        })
-        .save(tempWavPath);
+    writeStream.on('finish', () => {
+      mergeCache.set(cacheKey, {
+        path: outputPath,
+        url: outputUrl,
+        timestamp: Date.now()
+      });
+
+      res.json({ 
+        mixedAudioUrl: outputUrl,
+        mergeTime: (Date.now() - startTime) / 1000,
+        cached: false
+      });
     });
 
-    const endTime = Date.now();
-    const mergeTime = (endTime - startTime) / 1000;
-    console.log(`Total merge time: ${mergeTime} seconds`);
-
-    return res.json({ 
-      mixedAudioUrl: outputUrl,
-      mergeTime,
-      cached: false
+    writeStream.on('error', (error) => {
+      console.error('Error writing merged audio:', error);
+      res.status(500).json({ 
+        error: 'Failed to merge audio',
+        details: error.message
+      });
     });
 
   } catch (error) {
     console.error('Error merging audio:', error);
-    return res.status(500).json({ 
+    res.status(500).json({ 
       error: 'Failed to merge audio',
       details: error.message
     });
@@ -502,5 +398,92 @@ async function generateSilence(seconds, outputPath) {
       .save(outputPath);
   });
 }
+
+// Rate limiting
+router.use(rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+}));
+
+// Compression
+router.use(compression());
+
+// Efficient cleanup
+const CLEANUP_THRESHOLD = 24 * 60 * 60 * 1000; // 24 hours
+const OPTIMAL_BATCH_SIZE = 10;
+
+// Helper function to determine optimal batch size
+function determineOptimalBatchSize(totalBlocks) {
+  const maxBatchSize = 25;
+  const minBatchSize = 5;
+  return Math.min(maxBatchSize, Math.max(minBatchSize, Math.ceil(totalBlocks / 4)));
+}
+
+// Helper function to process blocks with workers
+async function processBlocksWithWorkers(blocks, workers) {
+  const batchSize = determineOptimalBatchSize(blocks.length);
+  const batches = [];
+  
+  for (let i = 0; i < blocks.length; i += batchSize) {
+    batches.push(blocks.slice(i, i + batchSize));
+  }
+
+  const results = await Promise.all(
+    batches.map((batch, index) => {
+      const worker = workers[index % workers.length];
+      return new Promise((resolve, reject) => {
+        worker.postMessage({ batch });
+        worker.once('message', resolve);
+        worker.once('error', reject);
+      });
+    })
+  );
+
+  return results.flat();
+}
+
+// Helper function to merge results
+async function mergeResults(results) {
+  const validFiles = results.filter(Boolean);
+  if (!validFiles.length) {
+    throw new Error('No valid audio files generated');
+  }
+
+  const finalFileName = `meditation-${Date.now()}.mp3`;
+  const finalPath = path.join(audioDir, finalFileName);
+  await mergeChunksEfficiently(validFiles, finalPath);
+
+  return {
+    audioUrl: `/audio/${finalFileName}`,
+    generationTime: Date.now() - results.startTime,
+    chunksProcessed: results.length
+  };
+}
+
+// Optimize cleanup function
+const cleanup = debounce(async () => {
+  try {
+    const files = await fs.promises.readdir(tempDir);
+    const now = Date.now();
+    
+    const filesToDelete = await Promise.all(
+      files.map(async file => {
+        const stats = await fs.promises.stat(path.join(tempDir, file));
+        return {
+          file,
+          shouldDelete: now - stats.mtime > CLEANUP_THRESHOLD
+        };
+      })
+    );
+
+    await Promise.all(
+      filesToDelete
+        .filter(({ shouldDelete }) => shouldDelete)
+        .map(({ file }) => fs.promises.unlink(path.join(tempDir, file)))
+    );
+  } catch (error) {
+    console.error('Cleanup error:', error);
+  }
+}, 1000);
 
 export default router;
