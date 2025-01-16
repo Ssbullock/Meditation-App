@@ -80,52 +80,40 @@ async function getOrCreateSilence(seconds) {
 // Optimize the parsePlaceholders function to handle all pauses efficiently
 function parsePlaceholders(script) {
   const blocks = [];
-  const MAX_CHUNK_LENGTH = 6000;
+  const MAX_CHUNK_LENGTH = 4000; // Maximize chunk size while staying under limit
 
   // Split by all pauses while keeping them
   const segments = script
     .replace(/\s+/g, ' ')
     .trim()
-    .split(/(\{\{PAUSE_\d+s\}\})/g);
+    .split(/(\{\{PAUSE_\d+s\}\})/g)
+    .filter(Boolean); // Remove empty segments immediately
   
   let currentChunk = '';
   let currentPause = 0;
 
-  for (let segment of segments) {
-    segment = segment.trim();
-    if (!segment) continue;
-
-    const pauseMatch = segment.match(/\{\{PAUSE_(\d+)s\}\}/);
+  for (const segment of segments) {
+    const pauseMatch = segment.trim().match(/\{\{PAUSE_(\d+)s\}\}/);
     if (pauseMatch) {
-      const pauseDuration = parseInt(pauseMatch[1], 10);
-      // If we have text accumulated, push it with any previous pause
       if (currentChunk) {
         blocks.push({ text: currentChunk, pause: currentPause });
         currentChunk = '';
-        currentPause = 0;
       }
-      // Add pause block
-      blocks.push({ text: '', pause: pauseDuration });
+      blocks.push({ text: '', pause: parseInt(pauseMatch[1], 10) });
+      currentPause = 0;
       continue;
     }
 
-    // For text segments, try to accumulate until we reach max length
     if ((currentChunk + ' ' + segment).length <= MAX_CHUNK_LENGTH) {
       currentChunk = currentChunk ? currentChunk + ' ' + segment : segment;
     } else {
-      if (currentChunk) {
-        blocks.push({ text: currentChunk, pause: currentPause });
-        currentPause = 0;
-      }
+      if (currentChunk) blocks.push({ text: currentChunk, pause: currentPause });
       currentChunk = segment;
+      currentPause = 0;
     }
   }
 
-  // Push any remaining chunk
-  if (currentChunk) {
-    blocks.push({ text: currentChunk, pause: currentPause });
-  }
-
+  if (currentChunk) blocks.push({ text: currentChunk, pause: currentPause });
   return blocks;
 }
 
@@ -243,19 +231,16 @@ router.post('/generate-audio', async (req, res) => {
   const startTime = Date.now();
   try {
     const { text, voice = 'alloy', model = 'tts-1' } = req.body;
-    if (!text) {
-      return res.status(400).json({ error: 'No text provided' });
-    }
+    if (!text) return res.status(400).json({ error: 'No text provided' });
 
     const blocks = parsePlaceholders(text);
     console.log(`Processing ${blocks.length} blocks...`);
 
-    // Maximum parallel processing
-    const MAX_CONCURRENT = 5;
+    // Process all blocks with maximum concurrency
+    const MAX_CONCURRENT = 100; // Significantly increased concurrency
     const chunkFiles = [];
-    let processed = 0;
-
-    // Process blocks in parallel with maximum concurrency
+    
+    // Process in larger batches
     for (let i = 0; i < blocks.length; i += MAX_CONCURRENT) {
       const batch = blocks.slice(i, Math.min(i + MAX_CONCURRENT, blocks.length));
       
@@ -264,28 +249,25 @@ router.post('/generate-audio', async (req, res) => {
       );
 
       chunkFiles.push(...results.filter(Boolean));
-      processed += batch.length;
-      console.log(`Progress: ${Math.round((processed / blocks.length) * 100)}%`);
+      console.log(`Progress: ${Math.round(((i + batch.length) / blocks.length) * 100)}%`);
     }
 
-    if (chunkFiles.length === 0) {
-      throw new Error('No audio chunks were generated');
-    }
+    if (!chunkFiles.length) throw new Error('No audio chunks were generated');
 
     // Merge chunks
     const finalFileName = `meditation-${Date.now()}.mp3`;
     const finalPath = path.join(audioDir, finalFileName);
     await mergeChunksEfficiently(chunkFiles, finalPath);
 
-    // Clean up non-cached temp files
-    const tempFiles = chunkFiles.filter(file => 
-      file && !file.includes('chunk-') && !file.includes('silence-')
-    );
-    for (const file of tempFiles) {
-      if (fs.existsSync(file)) {
-        fs.unlinkSync(file);
+    // Cleanup temp files in background
+    setImmediate(() => {
+      const tempFiles = chunkFiles.filter(file => 
+        file && !file.includes('chunk-') && !file.includes('silence-')
+      );
+      for (const file of tempFiles) {
+        if (fs.existsSync(file)) fs.unlinkSync(file);
       }
-    }
+    });
 
     const generationTime = (Date.now() - startTime) / 1000;
     console.log(`Generated in ${generationTime}s`);
@@ -298,10 +280,7 @@ router.post('/generate-audio', async (req, res) => {
     });
   } catch (error) {
     console.error('Error generating TTS audio:', error);
-    return res.status(500).json({ 
-      error: 'Failed to generate audio',
-      details: error.message
-    });
+    return res.status(500).json({ error: 'Failed to generate audio', details: error.message });
   }
 });
 
