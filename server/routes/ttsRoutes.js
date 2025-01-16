@@ -251,7 +251,7 @@ router.post('/generate-audio', async (req, res) => {
     console.log(`Processing ${blocks.length} blocks...`);
 
     // Maximum parallel processing
-    const MAX_CONCURRENT = 25;
+    const MAX_CONCURRENT = 50;
     const chunkFiles = [];
     let processed = 0;
 
