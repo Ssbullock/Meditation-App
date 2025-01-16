@@ -125,20 +125,42 @@ function parsePlaceholders(script) {
   return blocks;
 }
 
-// Update Redis implementation to be optional
+// Update Redis implementation with better error handling
 let redis;
+const REDIS_CONFIG = {
+  host: process.env.REDIS_HOST || '127.0.0.1',
+  port: process.env.REDIS_PORT || 6379,
+  maxRetriesPerRequest: 1,
+  retryStrategy: (times) => {
+    if (times > 3) {
+      console.log('Redis connection failed, falling back to in-memory cache');
+      return null; // Stop retrying
+    }
+    return Math.min(times * 100, 3000); // Exponential backoff
+  },
+  enableOfflineQueue: false,
+  lazyConnect: true // Don't connect immediately
+};
+
 try {
-  redis = new Redis(process.env.REDIS_URL || 'redis://127.0.0.1:6379');
+  redis = new Redis(process.env.REDIS_URL || REDIS_CONFIG);
+  
   redis.on('error', (err) => {
-    if (err.code === 'ECONNREFUSED') {
-      console.log('Redis not available, falling back to in-memory cache');
+    if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+      console.log('Redis connection failed, falling back to in-memory cache');
       redis = null;
     } else {
       console.error('Redis error:', err);
     }
   });
+
+  // Test the connection
+  redis.ping().catch(() => {
+    console.log('Redis ping failed, falling back to in-memory cache');
+    redis = null;
+  });
 } catch (error) {
-  console.log('Redis not available, falling back to in-memory cache');
+  console.log('Redis initialization failed, falling back to in-memory cache');
   redis = null;
 }
 
@@ -158,16 +180,21 @@ async function generateTTSForBlock(block, voice, model, index) {
     const cacheKey = generateChunkCacheKey(block.text, voice, model);
     
     // Try cache (Redis if available, otherwise in-memory)
-    if (redis) {
-      const cachedPath = await redis.get(`tts:${cacheKey}`);
-      if (cachedPath && fs.existsSync(cachedPath)) {
-        return cachedPath;
+    if (redis && redis.status === 'ready') {
+      try {
+        const cachedPath = await redis.get(`tts:${cacheKey}`);
+        if (cachedPath && fs.existsSync(cachedPath)) {
+          return cachedPath;
+        }
+      } catch (error) {
+        console.log('Redis cache retrieval failed, using in-memory cache');
       }
-    } else {
-      const cached = audioChunkCache.get(cacheKey);
-      if (cached && fs.existsSync(cached.path)) {
-        return cached.path;
-      }
+    }
+
+    // Fallback to in-memory cache
+    const cached = audioChunkCache.get(cacheKey);
+    if (cached && fs.existsSync(cached.path)) {
+      return cached.path;
     }
 
     // Generate TTS for text block
@@ -187,14 +214,19 @@ async function generateTTSForBlock(block, voice, model, index) {
     await fs.promises.writeFile(outPath, buffer);
     
     // Cache the result (Redis if available, otherwise in-memory)
-    if (redis) {
-      await redis.set(`tts:${cacheKey}`, outPath, 'EX', 86400); // 24h expiry
-    } else {
-      audioChunkCache.set(cacheKey, {
-        path: outPath,
-        timestamp: Date.now()
-      });
+    if (redis && redis.status === 'ready') {
+      try {
+        await redis.set(`tts:${cacheKey}`, outPath, 'EX', 86400); // 24h expiry
+      } catch (error) {
+        console.log('Redis cache storage failed, using in-memory cache only');
+      }
     }
+    
+    // Always cache in memory as fallback
+    audioChunkCache.set(cacheKey, {
+      path: outPath,
+      timestamp: Date.now()
+    });
     
     return outPath;
   } catch (error) {
