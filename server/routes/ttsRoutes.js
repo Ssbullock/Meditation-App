@@ -77,19 +77,19 @@ async function getOrCreateSilence(seconds) {
   return silenceFile;
 }
 
-// Simplify the parsePlaceholders function to create fewer, larger chunks
+// Optimize the parsePlaceholders function to handle all pauses efficiently
 function parsePlaceholders(script) {
   const blocks = [];
   const MAX_CHUNK_LENGTH = 4000;
 
-  // Normalize and split by long pauses only (3 seconds or more)
+  // Split by all pauses while keeping them
   const segments = script
     .replace(/\s+/g, ' ')
     .trim()
-    .split(/(\{\{PAUSE_[3-9]|PAUSE_\d{2,}s\}\})/g);
+    .split(/(\{\{PAUSE_\d+s\}\})/g);
   
   let currentChunk = '';
-  let totalPause = 0;
+  let currentPause = 0;
 
   for (let segment of segments) {
     segment = segment.trim();
@@ -97,24 +97,33 @@ function parsePlaceholders(script) {
 
     const pauseMatch = segment.match(/\{\{PAUSE_(\d+)s\}\}/);
     if (pauseMatch) {
-      totalPause += parseInt(pauseMatch[1], 10);
+      const pauseDuration = parseInt(pauseMatch[1], 10);
+      // If we have text accumulated, push it with any previous pause
+      if (currentChunk) {
+        blocks.push({ text: currentChunk, pause: currentPause });
+        currentChunk = '';
+        currentPause = 0;
+      }
+      // Add pause block
+      blocks.push({ text: '', pause: pauseDuration });
       continue;
     }
 
-    // Combine text until we reach max length
+    // For text segments, try to accumulate until we reach max length
     if ((currentChunk + ' ' + segment).length <= MAX_CHUNK_LENGTH) {
       currentChunk = currentChunk ? currentChunk + ' ' + segment : segment;
     } else {
       if (currentChunk) {
-        blocks.push({ text: currentChunk, pause: totalPause });
-        totalPause = 0;
+        blocks.push({ text: currentChunk, pause: currentPause });
+        currentPause = 0;
       }
       currentChunk = segment;
     }
   }
 
+  // Push any remaining chunk
   if (currentChunk) {
-    blocks.push({ text: currentChunk, pause: totalPause });
+    blocks.push({ text: currentChunk, pause: currentPause });
   }
 
   return blocks;
@@ -124,19 +133,17 @@ function parsePlaceholders(script) {
  * Helper to generate TTS for a single block with caching
  */
 async function generateTTSForBlock(block, voice, model, index) {
-  if (!block.text) {
-    // For pause blocks, use pre-generated silence
-    if (block.pause > 0) {
-      return await getOrCreateSilence(block.pause);
-    }
-    return null;
+  // Handle pause blocks more efficiently
+  if (!block.text && block.pause > 0) {
+    return await getOrCreateSilence(block.pause);
   }
+
+  if (!block.text) return null;
 
   // Check cache first
   const cacheKey = generateChunkCacheKey(block.text, voice, model);
   const cachedChunk = audioChunkCache.get(cacheKey);
   if (cachedChunk && fs.existsSync(cachedChunk.path)) {
-    console.log(`Using cached audio chunk ${index}`);
     return cachedChunk.path;
   }
 
