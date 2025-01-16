@@ -11,7 +11,6 @@ import rateLimit from 'express-rate-limit';
 import compression from 'compression';
 import { debounce } from 'lodash';
 import { createReadStream } from 'fs';
-import { AudioStreamMixer } from 'audio-stream-mixer';
 import Redis from 'ioredis';
 import { Worker } from 'worker_threads';
 import Queue from 'bull';
@@ -292,43 +291,45 @@ router.post('/mix-with-music', async (req, res) => {
       });
     }
 
-    const streamMixer = new AudioStreamMixer({
-      ttsStream: createReadStream(ttsPath),
-      musicStream: createReadStream(musicPath),
-      outputFormat: 'mp3',
-      useHardwareAcceleration: true,
-      ttsVolume,
-      musicVolume
-    });
-
     const outputFileName = `merged-${cacheKey}.mp3`;
     const outputPath = path.join(audioDir, outputFileName);
     const outputUrl = `/audio/${outputFileName}`;
 
-    // Stream to file and cache the result
-    const writeStream = fs.createWriteStream(outputPath);
-    streamMixer.pipe(writeStream);
-
-    writeStream.on('finish', () => {
-      mergeCache.set(cacheKey, {
-        path: outputPath,
-        url: outputUrl,
-        timestamp: Date.now()
-      });
-
-      res.json({ 
-        mixedAudioUrl: outputUrl,
-        mergeTime: (Date.now() - startTime) / 1000,
-        cached: false
-      });
+    // Use fluent-ffmpeg for mixing
+    await new Promise((resolve, reject) => {
+      ffmpeg()
+        .input(ttsPath)
+        .input(musicPath)
+        .complexFilter([
+          `[0:a]volume=${ttsVolume}[tts]`,
+          `[1:a]volume=${musicVolume}[music]`,
+          '[tts][music]amix=inputs=2:duration=longest[out]'
+        ])
+        .outputOptions([
+          '-map', '[out]',
+          '-c:a', 'libmp3lame',
+          '-q:a', '2',
+          '-movflags', '+faststart'
+        ])
+        .on('end', () => {
+          mergeCache.set(cacheKey, {
+            path: outputPath,
+            url: outputUrl,
+            timestamp: Date.now()
+          });
+          resolve();
+        })
+        .on('error', (error) => {
+          console.error('Error mixing audio:', error);
+          reject(error);
+        })
+        .save(outputPath);
     });
 
-    writeStream.on('error', (error) => {
-      console.error('Error writing merged audio:', error);
-      res.status(500).json({ 
-        error: 'Failed to merge audio',
-        details: error.message
-      });
+    res.json({ 
+      mixedAudioUrl: outputUrl,
+      mergeTime: (Date.now() - startTime) / 1000,
+      cached: false
     });
 
   } catch (error) {
