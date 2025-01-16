@@ -125,8 +125,22 @@ function parsePlaceholders(script) {
   return blocks;
 }
 
-// Example Redis implementation
-const redis = new Redis(process.env.REDIS_URL);
+// Update Redis implementation to be optional
+let redis;
+try {
+  redis = new Redis(process.env.REDIS_URL || 'redis://127.0.0.1:6379');
+  redis.on('error', (err) => {
+    if (err.code === 'ECONNREFUSED') {
+      console.log('Redis not available, falling back to in-memory cache');
+      redis = null;
+    } else {
+      console.error('Redis error:', err);
+    }
+  });
+} catch (error) {
+  console.log('Redis not available, falling back to in-memory cache');
+  redis = null;
+}
 
 /**
  * Helper to generate TTS for a single block with caching
@@ -141,12 +155,19 @@ async function generateTTSForBlock(block, voice, model, index) {
     if (!block.text) return null;
 
     // Generate cache key
-    const cacheKey = `tts:${generateChunkCacheKey(block.text, voice, model)}`;
+    const cacheKey = generateChunkCacheKey(block.text, voice, model);
     
-    // Try Redis cache first
-    const cachedPath = await redis.get(cacheKey);
-    if (cachedPath && fs.existsSync(cachedPath)) {
-      return cachedPath;
+    // Try cache (Redis if available, otherwise in-memory)
+    if (redis) {
+      const cachedPath = await redis.get(`tts:${cacheKey}`);
+      if (cachedPath && fs.existsSync(cachedPath)) {
+        return cachedPath;
+      }
+    } else {
+      const cached = audioChunkCache.get(cacheKey);
+      if (cached && fs.existsSync(cached.path)) {
+        return cached.path;
+      }
     }
 
     // Generate TTS for text block
@@ -161,12 +182,19 @@ async function generateTTSForBlock(block, voice, model, index) {
     }
 
     const buffer = Buffer.from(await mp3Response.arrayBuffer());
-    const outFile = `chunk-${generateChunkCacheKey(block.text, voice, model)}.mp3`;
+    const outFile = `chunk-${cacheKey}.mp3`;
     const outPath = path.join(tempDir, outFile);
     await fs.promises.writeFile(outPath, buffer);
     
-    // Cache the result in Redis
-    await redis.set(cacheKey, outPath, 'EX', 86400); // 24h expiry
+    // Cache the result (Redis if available, otherwise in-memory)
+    if (redis) {
+      await redis.set(`tts:${cacheKey}`, outPath, 'EX', 86400); // 24h expiry
+    } else {
+      audioChunkCache.set(cacheKey, {
+        path: outPath,
+        timestamp: Date.now()
+      });
+    }
     
     return outPath;
   } catch (error) {
