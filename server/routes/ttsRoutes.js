@@ -80,7 +80,7 @@ async function getOrCreateSilence(seconds) {
 // Optimize the parsePlaceholders function to handle all pauses efficiently
 function parsePlaceholders(script) {
   const blocks = [];
-  const MAX_CHUNK_LENGTH = 4000;
+  const MAX_CHUNK_LENGTH = 6000;
 
   // Split by all pauses while keeping them
   const segments = script
@@ -251,7 +251,7 @@ router.post('/generate-audio', async (req, res) => {
     console.log(`Processing ${blocks.length} blocks...`);
 
     // Maximum parallel processing
-    const MAX_CONCURRENT = 50;
+    const MAX_CONCURRENT = 5;
     const chunkFiles = [];
     let processed = 0;
 
