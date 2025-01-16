@@ -77,50 +77,44 @@ async function getOrCreateSilence(seconds) {
   return silenceFile;
 }
 
-/**
- * Helper: parse script with placeholders like {{PAUSE_5s}} and add natural pauses
- * Returns an array of { text: string, pause: number }.
- */
+// Simplify the parsePlaceholders function to create fewer, larger chunks
 function parsePlaceholders(script) {
   const blocks = [];
-  const MAX_CHUNK_LENGTH = 4000; // OpenAI's limit is 4096
+  const MAX_CHUNK_LENGTH = 4000;
 
-  // First, normalize the script to ensure consistent spacing
-  const normalizedScript = script.replace(/\s+/g, ' ').trim();
-  
-  // Split by pause placeholders but keep them in the result
-  const segments = normalizedScript.split(/(\{\{PAUSE_\d+s\}\})/);
+  // Normalize and split by long pauses only (3 seconds or more)
+  const segments = script
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(/(\{\{PAUSE_[3-9]|PAUSE_\d{2,}s\}\})/g);
   
   let currentChunk = '';
-  let currentPause = 0;
-  
+  let totalPause = 0;
+
   for (let segment of segments) {
     segment = segment.trim();
     if (!segment) continue;
 
-    // Handle pause placeholders
     const pauseMatch = segment.match(/\{\{PAUSE_(\d+)s\}\}/);
     if (pauseMatch) {
-      currentPause += parseInt(pauseMatch[1], 10);
+      totalPause += parseInt(pauseMatch[1], 10);
       continue;
     }
 
-    // For text segments, try to accumulate until we reach the max length
+    // Combine text until we reach max length
     if ((currentChunk + ' ' + segment).length <= MAX_CHUNK_LENGTH) {
       currentChunk = currentChunk ? currentChunk + ' ' + segment : segment;
     } else {
-      // If current chunk is not empty, push it with accumulated pause
       if (currentChunk) {
-        blocks.push({ text: currentChunk, pause: currentPause });
-        currentPause = 0;
+        blocks.push({ text: currentChunk, pause: totalPause });
+        totalPause = 0;
       }
       currentChunk = segment;
     }
   }
 
-  // Push any remaining chunk with its pause
   if (currentChunk) {
-    blocks.push({ text: currentChunk, pause: currentPause });
+    blocks.push({ text: currentChunk, pause: totalPause });
   }
 
   return blocks;
@@ -246,63 +240,48 @@ router.post('/generate-audio', async (req, res) => {
       return res.status(400).json({ error: 'No text provided' });
     }
 
-    console.log('Starting TTS generation with:', {
-      textLength: text.length,
-      voice,
-      model
-    });
-
     const blocks = parsePlaceholders(text);
-    console.log(`Split into ${blocks.length} blocks for processing`);
+    console.log(`Processing ${blocks.length} blocks...`);
 
-    // Maximum parallel requests
-    const MAX_CONCURRENT = 20; // Increased from 12 to 20
+    // Maximum parallel processing
+    const MAX_CONCURRENT = 25;
     const chunkFiles = [];
-    
-    // Process all blocks with maximum concurrency
+    let processed = 0;
+
+    // Process blocks in parallel with maximum concurrency
     for (let i = 0; i < blocks.length; i += MAX_CONCURRENT) {
-      const batch = blocks.slice(i, i + MAX_CONCURRENT);
-      console.log(`Processing batch ${Math.floor(i / MAX_CONCURRENT) + 1}/${Math.ceil(blocks.length / MAX_CONCURRENT)}`);
+      const batch = blocks.slice(i, Math.min(i + MAX_CONCURRENT, blocks.length));
       
       const results = await Promise.all(
-        batch.map((block, index) =>
-          generateTTSForBlock(block, voice, model, i + index)
-            .catch(error => {
-              console.error(`Error processing block ${i + index}:`, error);
-              return null;
-            })
-        )
+        batch.map(block => generateTTSForBlock(block, voice, model, i))
       );
 
-      const validFiles = results.filter(file => file !== null);
-      chunkFiles.push(...validFiles);
-      
-      const progress = Math.round(((i + batch.length) / blocks.length) * 100);
-      console.log(`Progress: ${progress}% (${i + batch.length}/${blocks.length} blocks)`);
+      chunkFiles.push(...results.filter(Boolean));
+      processed += batch.length;
+      console.log(`Progress: ${Math.round((processed / blocks.length) * 100)}%`);
     }
 
     if (chunkFiles.length === 0) {
       throw new Error('No audio chunks were generated');
     }
 
-    console.log(`Merging ${chunkFiles.length} audio files...`);
+    // Merge chunks
     const finalFileName = `meditation-${Date.now()}.mp3`;
     const finalPath = path.join(audioDir, finalFileName);
-
-    await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
     await mergeChunksEfficiently(chunkFiles, finalPath);
 
-    // Cleanup temp files
-    const tempFiles = chunkFiles.filter(file => !file.includes('chunk-') && !file.includes('silence-'));
+    // Clean up non-cached temp files
+    const tempFiles = chunkFiles.filter(file => 
+      file && !file.includes('chunk-') && !file.includes('silence-')
+    );
     for (const file of tempFiles) {
       if (fs.existsSync(file)) {
         fs.unlinkSync(file);
       }
     }
 
-    const endTime = Date.now();
-    const generationTime = (endTime - startTime) / 1000;
-    console.log(`Total TTS generation time: ${generationTime} seconds`);
+    const generationTime = (Date.now() - startTime) / 1000;
+    console.log(`Generated in ${generationTime}s`);
 
     return res.json({ 
       audioUrl: `/audio/${finalFileName}`, 
@@ -314,8 +293,7 @@ router.post('/generate-audio', async (req, res) => {
     console.error('Error generating TTS audio:', error);
     return res.status(500).json({ 
       error: 'Failed to generate audio',
-      details: error.message,
-      step: error.step || 'unknown'
+      details: error.message
     });
   }
 });
