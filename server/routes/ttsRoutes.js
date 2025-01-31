@@ -15,6 +15,9 @@ import { createReadStream } from 'fs';
 import Redis from 'ioredis';
 import { Worker } from 'worker_threads';
 import Queue from 'bull';
+import { GridFSBucket, MongoClient } from 'mongodb';
+import { Readable } from 'stream';
+import { ObjectId } from 'mongodb';
 
 const router = Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -122,6 +125,55 @@ function chunkText(text, maxLength = 4000) {
   return chunks;
 }
 
+// Add MongoDB connection and GridFS setup
+let gridFSBucket;
+const mongoUrl = process.env.MONGODB_URI || 'mongodb://localhost:27017';
+
+// Initialize MongoDB connection
+async function initMongoDB() {
+  try {
+    const client = await MongoClient.connect(mongoUrl);
+    const db = client.db(process.env.MONGODB_DB || 'meditation-app');
+    gridFSBucket = new GridFSBucket(db, {
+      bucketName: 'audio'
+    });
+    console.log('MongoDB GridFS initialized successfully');
+  } catch (error) {
+    console.error('MongoDB GridFS initialization failed:', error);
+  }
+}
+
+initMongoDB();
+
+// Helper function to upload to GridFS
+async function uploadToGridFS(buffer, filename) {
+  try {
+    // Create a readable stream from the buffer
+    const readableStream = Readable.from(buffer);
+    
+    // Create a unique filename to avoid collisions
+    const uniqueFilename = `${Date.now()}-${filename}`;
+    
+    // Upload to GridFS
+    const uploadStream = gridFSBucket.openUploadStream(uniqueFilename, {
+      contentType: 'audio/mpeg'
+    });
+    
+    await new Promise((resolve, reject) => {
+      readableStream
+        .pipe(uploadStream)
+        .on('error', reject)
+        .on('finish', resolve);
+    });
+
+    return `/audio/${uploadStream.id}`;
+  } catch (error) {
+    console.error('GridFS upload error:', error);
+    throw error;
+  }
+}
+
+// Modify the generateTTS function to use GridFS
 async function generateTTS(text, voice = 'alloy', model = 'tts-1') {
   try {
     const chunks = chunkText(text);
@@ -129,20 +181,29 @@ async function generateTTS(text, voice = 'alloy', model = 'tts-1') {
 
     for (const chunk of chunks) {
       if (chunk.type === 'silence') {
-        // Handle silence chunks
         const silenceFile = await getOrCreateSilence(chunk.duration);
-        results.push(silenceFile);
+        const silenceBuffer = await fs.promises.readFile(silenceFile);
+        const silenceUrl = await uploadToGridFS(
+          silenceBuffer, 
+          `silence-${chunk.duration}s.mp3`
+        );
+        results.push({ url: silenceUrl, isTemp: true });
         continue;
       }
 
       // Handle text chunks
       const cacheKey = generateChunkCacheKey(chunk.content, voice, model);
-      const outFile = `chunk-${cacheKey}.mp3`;
-      const outPath = path.join(audioDir, outFile);
+      const fileName = `chunk-${cacheKey}.mp3`;
 
-      if (fs.existsSync(outPath)) {
-        results.push(outPath);
-        continue;
+      try {
+        // Try to find existing file in GridFS
+        const files = await gridFSBucket.find({ filename: fileName }).toArray();
+        if (files.length > 0) {
+          results.push({ url: `/audio/${files[0]._id}`, isTemp: false });
+          continue;
+        }
+      } catch (error) {
+        // File doesn't exist, generate new one
       }
 
       const mp3Response = await openai.audio.speech.create({
@@ -156,51 +217,64 @@ async function generateTTS(text, voice = 'alloy', model = 'tts-1') {
       }
 
       const buffer = Buffer.from(await mp3Response.arrayBuffer());
-      await fs.promises.writeFile(outPath, buffer);
-      results.push(outPath);
+      const url = await uploadToGridFS(buffer, fileName);
+      results.push({ url, isTemp: false });
     }
 
-    // If there's only one chunk and it's not silence, return it directly
-    if (results.length === 1) {
-      const finalPath = results[0];
-      return { audioUrl: `/audio/${path.basename(finalPath)}` };
+    // If there's only one chunk and it's not temporary, return it directly
+    if (results.length === 1 && !results[0].isTemp) {
+      return { audioUrl: results[0].url };
     }
 
-    // Merge all chunks (including silence)
+    // Merge all chunks
+    const mergedBuffer = await mergeAudioBuffers(results.map(r => r.url));
     const finalFileName = `merged-${Date.now()}.mp3`;
-    const finalPath = path.join(audioDir, finalFileName);
-    
-    await mergeAudioFiles(results, finalPath);
-    return { audioUrl: `/audio/${finalFileName}` };
+    const finalUrl = await uploadToGridFS(mergedBuffer, finalFileName);
 
+    // Clean up temporary files from GridFS
+    for (const result of results) {
+      if (result.isTemp) {
+        try {
+          const fileId = result.url.split('/').pop();
+          await gridFSBucket.delete(new ObjectId(fileId));
+        } catch (error) {
+          console.error('Error deleting temporary file:', error);
+        }
+      }
+    }
+
+    return { audioUrl: finalUrl };
   } catch (error) {
     console.error('Error generating TTS:', error);
     throw error;
   }
 }
 
-// Helper function to merge audio files
-async function mergeAudioFiles(files, outputPath) {
-  return new Promise((resolve, reject) => {
-    const command = ffmpeg();
-    
-    files.forEach(file => {
-      command.input(file);
-    });
+// New helper function to merge audio buffers
+async function mergeAudioBuffers(urls) {
+  // Download all files to temp directory
+  const tempFiles = await Promise.all(urls.map(async (url, index) => {
+    const response = await fetch(url);
+    const buffer = await response.arrayBuffer();
+    const tempFile = path.join(tempDir, `temp-${index}-${Date.now()}.mp3`);
+    await fs.promises.writeFile(tempFile, Buffer.from(buffer));
+    return tempFile;
+  }));
 
-    command
-      .mergeToFile(outputPath, tempDir)
-      .on('end', () => {
-        // Clean up temporary chunk files
-        files.forEach(file => {
-          if (fs.existsSync(file)) {
-            fs.unlink(file, () => {});
-          }
-        });
-        resolve();
-      })
-      .on('error', (err) => reject(err));
-  });
+  // Merge files
+  const outputPath = path.join(tempDir, `merged-${Date.now()}.mp3`);
+  await mergeAudioFiles(tempFiles, outputPath);
+  
+  // Read merged file
+  const mergedBuffer = await fs.promises.readFile(outputPath);
+  
+  // Clean up temp files
+  await Promise.all([
+    ...tempFiles.map(file => fs.promises.unlink(file)),
+    fs.promises.unlink(outputPath)
+  ]);
+
+  return mergedBuffer;
 }
 
 router.post('/generate-audio', async (req, res) => {
@@ -675,5 +749,25 @@ const cleanup = debounce(async () => {
     console.error('Cleanup error:', error);
   }
 }, 1000);
+
+// Add route to serve audio files
+router.get('/audio/:id', async (req, res) => {
+  try {
+    const id = new ObjectId(req.params.id);
+    
+    // Set audio headers
+    res.set('content-type', 'audio/mpeg');
+    res.set('accept-ranges', 'bytes');
+
+    // Create download stream from GridFS
+    const downloadStream = gridFSBucket.openDownloadStream(id);
+    
+    // Pipe the file to the response
+    downloadStream.pipe(res);
+  } catch (error) {
+    console.error('Error serving audio file:', error);
+    res.status(500).json({ error: 'Failed to serve audio file' });
+  }
+});
 
 export default router;
