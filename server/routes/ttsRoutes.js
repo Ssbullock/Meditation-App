@@ -34,9 +34,91 @@ const audioDir = path.join(__dirname, '../public/audio');
   }
 })();
 
-// Initialize the new OpenAI
+// Initialize OpenAI
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Semaphore for controlling concurrent generations
+let activeGenerations = 0;
+const MAX_CONCURRENT = 3;
+
+// Simple queue implementation
+const queue = [];
+
+function generateChunkCacheKey(text, voice, model) {
+  const data = `${text}-${voice}-${model}`;
+  return crypto.createHash('md5').update(data).digest('hex');
+}
+
+async function processQueue() {
+  if (activeGenerations >= MAX_CONCURRENT || queue.length === 0) return;
+  
+  const { text, voice, model, resolve, reject } = queue.shift();
+  activeGenerations++;
+
+  try {
+    const result = await generateTTS(text, voice, model);
+    resolve(result);
+  } catch (error) {
+    reject(error);
+  } finally {
+    activeGenerations--;
+    processQueue(); // Process next item in queue
+  }
+}
+
+async function generateTTS(text, voice, model) {
+  try {
+    const cacheKey = generateChunkCacheKey(text, voice, model);
+    const outFile = `chunk-${cacheKey}.mp3`;
+    const outPath = path.join(audioDir, outFile);
+
+    // Check if file already exists
+    if (fs.existsSync(outPath)) {
+      return { audioUrl: `/audio/${outFile}` };
+    }
+
+    const mp3Response = await openai.audio.speech.create({
+      model,
+      voice,
+      input: text,
+    });
+
+    if (!mp3Response) {
+      throw new Error('No response from OpenAI TTS API');
+    }
+
+    const buffer = Buffer.from(await mp3Response.arrayBuffer());
+    await fs.promises.writeFile(outPath, buffer);
+    
+    return { audioUrl: `/audio/${outFile}` };
+  } catch (error) {
+    console.error('Error generating TTS:', error);
+    throw error;
+  }
+}
+
+router.post('/generate-audio', async (req, res) => {
+  const { text, voice, model } = req.body;
+
+  if (!text) {
+    return res.status(400).json({ error: 'Text is required' });
+  }
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      queue.push({ text, voice, model, resolve, reject });
+      processQueue();
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ 
+      error: 'Failed to generate audio',
+      details: error.message
+    });
+  }
 });
 
 // Add audio chunk cache
@@ -56,11 +138,6 @@ setInterval(() => {
     }
   }
 }, CHUNK_CACHE_DURATION);
-
-function generateChunkCacheKey(text, voice, model) {
-  const data = `${text}-${voice}-${model}`;
-  return crypto.createHash('md5').update(data).digest('hex');
-}
 
 // Optimize silence generation with pre-generated silence files
 const SILENCE_CACHE = new Map();
@@ -269,20 +346,6 @@ async function mergeChunksEfficiently(files, outputPath) {
 }
 
 const audioQueue = new Queue('audio-processing');
-
-/**
- * POST /api/tts/generate-audio
- */
-router.post('/generate-audio', async (req, res) => {
-  const job = await audioQueue.add({
-    text: req.body.text,
-    voice: req.body.voice,
-    model: req.body.model
-  });
-
-  // Return job ID immediately
-  res.json({ jobId: job.id });
-});
 
 // Worker process
 audioQueue.process(async (job) => {
