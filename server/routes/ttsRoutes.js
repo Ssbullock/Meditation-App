@@ -68,7 +68,7 @@ async function processQueue() {
   }
 }
 
-async function generateTTS(text, voice, model) {
+async function generateTTS(text, voice = 'alloy', model = 'tts-1') {
   try {
     const cacheKey = generateChunkCacheKey(text, voice, model);
     const outFile = `chunk-${cacheKey}.mp3`;
@@ -80,8 +80,8 @@ async function generateTTS(text, voice, model) {
     }
 
     const mp3Response = await openai.audio.speech.create({
-      model,
-      voice,
+      model: model,
+      voice: voice,
       input: text,
     });
 
@@ -100,7 +100,11 @@ async function generateTTS(text, voice, model) {
 }
 
 router.post('/generate-audio', async (req, res) => {
-  const { text, voice, model } = req.body;
+  const { 
+    text, 
+    voice = 'alloy',     // Default voice
+    model = 'tts-1'      // Default model
+  } = req.body;
 
   if (!text) {
     return res.status(400).json({ error: 'Text is required' });
@@ -108,7 +112,13 @@ router.post('/generate-audio', async (req, res) => {
 
   try {
     const result = await new Promise((resolve, reject) => {
-      queue.push({ text, voice, model, resolve, reject });
+      queue.push({ 
+        text, 
+        voice, 
+        model,
+        resolve, 
+        reject 
+      });
       processQueue();
     });
 
