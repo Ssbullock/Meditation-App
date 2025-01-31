@@ -68,35 +68,99 @@ async function processQueue() {
   }
 }
 
+// Add text chunking function
+function chunkText(text, maxLength = 4000) {
+  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+  const chunks = [];
+  let currentChunk = '';
+
+  for (const sentence of sentences) {
+    if ((currentChunk + sentence).length <= maxLength) {
+      currentChunk += sentence;
+    } else {
+      if (currentChunk) chunks.push(currentChunk.trim());
+      currentChunk = sentence;
+    }
+  }
+  
+  if (currentChunk) chunks.push(currentChunk.trim());
+  return chunks;
+}
+
 async function generateTTS(text, voice = 'alloy', model = 'tts-1') {
   try {
-    const cacheKey = generateChunkCacheKey(text, voice, model);
-    const outFile = `chunk-${cacheKey}.mp3`;
-    const outPath = path.join(audioDir, outFile);
+    // Split text into chunks if it's too long
+    const chunks = chunkText(text);
+    const results = [];
 
-    // Check if file already exists
-    if (fs.existsSync(outPath)) {
-      return { audioUrl: `/audio/${outFile}` };
+    // Process each chunk
+    for (const chunk of chunks) {
+      const cacheKey = generateChunkCacheKey(chunk, voice, model);
+      const outFile = `chunk-${cacheKey}.mp3`;
+      const outPath = path.join(audioDir, outFile);
+
+      // Check if chunk already exists
+      if (fs.existsSync(outPath)) {
+        results.push(outPath);
+        continue;
+      }
+
+      const mp3Response = await openai.audio.speech.create({
+        model: model,
+        voice: voice,
+        input: chunk,
+      });
+
+      if (!mp3Response) {
+        throw new Error('No response from OpenAI TTS API');
+      }
+
+      const buffer = Buffer.from(await mp3Response.arrayBuffer());
+      await fs.promises.writeFile(outPath, buffer);
+      results.push(outPath);
     }
 
-    const mp3Response = await openai.audio.speech.create({
-      model: model,
-      voice: voice,
-      input: text,
-    });
-
-    if (!mp3Response) {
-      throw new Error('No response from OpenAI TTS API');
+    // If there's only one chunk, return it directly
+    if (results.length === 1) {
+      const finalPath = results[0];
+      return { audioUrl: `/audio/${path.basename(finalPath)}` };
     }
 
-    const buffer = Buffer.from(await mp3Response.arrayBuffer());
-    await fs.promises.writeFile(outPath, buffer);
+    // If there are multiple chunks, merge them
+    const finalFileName = `merged-${Date.now()}.mp3`;
+    const finalPath = path.join(audioDir, finalFileName);
     
-    return { audioUrl: `/audio/${outFile}` };
+    await mergeAudioFiles(results, finalPath);
+    return { audioUrl: `/audio/${finalFileName}` };
+
   } catch (error) {
     console.error('Error generating TTS:', error);
     throw error;
   }
+}
+
+// Helper function to merge audio files
+async function mergeAudioFiles(files, outputPath) {
+  return new Promise((resolve, reject) => {
+    const command = ffmpeg();
+    
+    files.forEach(file => {
+      command.input(file);
+    });
+
+    command
+      .mergeToFile(outputPath, tempDir)
+      .on('end', () => {
+        // Clean up temporary chunk files
+        files.forEach(file => {
+          if (fs.existsSync(file)) {
+            fs.unlink(file, () => {});
+          }
+        });
+        resolve();
+      })
+      .on('error', (err) => reject(err));
+  });
 }
 
 router.post('/generate-audio', async (req, res) => {
