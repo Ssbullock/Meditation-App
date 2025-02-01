@@ -94,4 +94,28 @@
 .tag:hover {
   background-color: #dee2e6;
   transform: scale(1.05);
+}
+
+@media (max-width: 768px) {
+  .tab-button, .create-button, .delete-button {
+    min-height: 44px; /* Touch-friendly size */
+    padding: 8px 16px;
+  }
+
+  .card {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  audio {
+    margin: 8px 0;
+    border-radius: 8px;
+    background: #f8f9fa;
+  }
+
+  .tag {
+    padding: 4px 8px;
+    margin: 2px;
+    font-size: 0.8rem;
+  }
 } 

@@ -622,6 +622,11 @@ const styles = {
     marginTop: '2rem',
     marginBottom: '2rem',
     backdropFilter: 'blur(10px)',
+    '@media (max-width: 768px)': {
+      padding: '1rem',
+      margin: '1rem',
+      borderRadius: '8px',
+    }
   },
   pageBackground: {
     background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
@@ -642,6 +647,10 @@ const styles = {
     marginBottom: '1.5rem',
     border: '1px solid rgba(0, 0, 0, 0.1)',
     boxShadow: '0 2px 8px rgba(0, 0, 0, 0.05)',
+    '@media (max-width: 768px)': {
+      padding: '1rem',
+      borderRadius: '8px',
+    }
   },
   sectionTitle: {
     color: '#2c3e50',
@@ -683,6 +692,9 @@ const styles = {
     gap: '0.8rem',
     marginTop: '1rem',
     marginBottom: '1.5rem',
+    '@media (max-width: 768px)': {
+      gap: '0.5rem',
+    }
   },
   toggleButton: {
     border: 'none',
@@ -697,6 +709,11 @@ const styles = {
       transform: 'translateY(-2px)',
       boxShadow: '0 4px 8px rgba(0, 0, 0, 0.1)',
     },
+    '@media (max-width: 768px)': {
+      padding: '0.6rem 1rem',
+      fontSize: '0.8rem',
+      flex: '1 0 calc(50% - 0.5rem)', // Two buttons per row on mobile
+    }
   },
   mainButton: {
     backgroundColor: '#667eea',
@@ -755,6 +772,9 @@ const styles = {
     minWidth: '200px',
     outline: 'none',
     backgroundColor: '#fff',
+    '@media (max-width: 768px)': {
+      width: '100%',
+    }
   },
   loadingBar: {
     marginTop: '0.8rem',
@@ -772,6 +792,10 @@ const styles = {
     padding: '1rem',
     backgroundColor: 'rgba(255, 255, 255, 0.5)',
     borderRadius: '8px',
+    '@media (max-width: 768px)': {
+      flexDirection: 'column',
+      gap: '0.5rem',
+    }
   },
   audioPlayer: {
     width: '100%',
@@ -834,6 +858,9 @@ const styles = {
   },
   voiceSection: {
     marginTop: '2rem',
+    '@media (max-width: 768px)': {
+      marginTop: '1rem',
+    }
   },
   buttonContainer: {
     position: 'relative',
@@ -888,5 +915,29 @@ const styles = {
     }
   },
 };
+
+// Add CSS for mobile-specific audio player styling
+const audioPlayerStyles = `
+  @media (max-width: 768px) {
+    audio {
+      width: 100%;
+      height: 40px;
+    }
+    
+    audio::-webkit-media-controls-panel {
+      background-color: #f8f9fa;
+    }
+    
+    audio::-webkit-media-controls-current-time-display,
+    audio::-webkit-media-controls-time-remaining-display {
+      font-size: 12px;
+    }
+  }
+`;
+
+// Add the styles to the document
+const styleSheet = document.createElement("style");
+styleSheet.innerText = audioPlayerStyles;
+document.head.appendChild(styleSheet);
 
 export default CreateMeditation;

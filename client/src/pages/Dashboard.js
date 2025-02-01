@@ -3,6 +3,8 @@ import React, { useState, useEffect } from 'react';
 import api from '../utils/api';
 import { Link } from 'react-router-dom';
 import '../styles/Dashboard.css';
+import '../styles/responsive.css';
+import { ObjectId } from 'mongodb';
 
 function Dashboard() {
   const [selectedTab, setSelectedTab] = useState('meditations');
@@ -62,9 +64,67 @@ function Dashboard() {
     }
   };
 
+  // Add intersection observer for lazy loading
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const audio = entry.target;
+            audio.preload = "metadata";
+            observer.unobserve(audio);
+          }
+        });
+      },
+      { rootMargin: '50px' }
+    );
+
+    document.querySelectorAll('audio').forEach(audio => {
+      observer.observe(audio);
+    });
+
+    return () => observer.disconnect();
+  }, [savedMeditations]);
+
+  useEffect(() => {
+    let touchStart = 0;
+    let touchEnd = 0;
+
+    const handleTouchStart = (e) => {
+      touchStart = e.targetTouches[0].clientY;
+    };
+
+    const handleTouchMove = (e) => {
+      touchEnd = e.targetTouches[0].clientY;
+    };
+
+    const handleTouchEnd = () => {
+      if (touchStart - touchEnd > 150) {
+        // Pull down detected
+        fetchMeditations();
+        fetchMusicFiles();
+      }
+      touchStart = 0;
+      touchEnd = 0;
+    };
+
+    const content = document.querySelector('.mobile-padding');
+    if (content) {
+      content.addEventListener('touchstart', handleTouchStart);
+      content.addEventListener('touchmove', handleTouchMove);
+      content.addEventListener('touchend', handleTouchEnd);
+
+      return () => {
+        content.removeEventListener('touchstart', handleTouchStart);
+        content.removeEventListener('touchmove', handleTouchMove);
+        content.removeEventListener('touchend', handleTouchEnd);
+      };
+    }
+  }, []);
+
   return (
-    <div style={styles.container}>
-      <div style={styles.sidebar}>
+    <div className="mobile-stack" style={styles.container}>
+      <div className="mobile-full-width" style={styles.sidebar}>
         <button
           className={`tab-button ${selectedTab === 'meditations' ? 'active' : ''}`}
           onClick={() => handleTabClick('meditations')}
@@ -78,30 +138,30 @@ function Dashboard() {
           Songs
         </button>
         <Link to="/create" style={{ textDecoration: 'none' }}>
-          <button className="create-button">
+          <button className="create-button mobile-full-width">
             Create New
           </button>
         </Link>
       </div>
 
-      <div style={styles.content}>
+      <div className="mobile-padding" style={styles.content}>
         {selectedTab === 'meditations' && (
           <div>
             <h2 style={styles.contentHeader}>Saved Meditations</h2>
             {savedMeditations.map((med) => (
-              <div key={med._id} className="card">
+              <div key={med._id} className="card mobile-card">
                 <div style={styles.cardHeader}>
-                  <h3 style={styles.cardTitle}>
+                  <h3 style={styles.cardTitle} className="mobile-compact-text">
                     {med.title || `Meditation (${new Date(med.createdAt).toLocaleDateString()})`}
                   </h3>
                   <button
                     onClick={() => handleDeleteMeditation(med._id)}
-                    className="delete-button"
+                    className="delete-button mobile-small-text"
                   >
                     Delete
                   </button>
                 </div>
-                <div style={styles.infoText}>
+                <div style={styles.infoText} className="mobile-compact-text">
                   <strong>Goals:</strong> {med.goals}
                 </div>
                 <div style={styles.infoText}>
@@ -118,7 +178,8 @@ function Dashboard() {
                     controls
                     src={`${process.env.REACT_APP_API_URL}${med.audioUrl}`}
                     style={styles.audioPlayer}
-                    preload="metadata"
+                    preload="none"
+                    className="mobile-full-width"
                   />
                 )}
               </div>
@@ -162,6 +223,9 @@ const styles = {
     display: 'flex',
     height: '100vh',
     backgroundColor: '#f5f7fa',
+    '@media (max-width: 768px)': {
+      flexDirection: 'column',
+    }
   },
   sidebar: {
     width: '200px',
@@ -171,12 +235,24 @@ const styles = {
     flexDirection: 'column',
     gap: '1rem',
     boxShadow: '2px 0 4px rgba(0, 0, 0, 0.1)',
+    '@media (max-width: 768px)': {
+      width: '100%',
+      padding: '1rem',
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      position: 'sticky',
+      top: 0,
+      zIndex: 10,
+    }
   },
   content: {
     flex: 1,
     padding: '2rem',
     overflowY: 'auto',
     backgroundColor: '#f8f9fa',
+    '@media (max-width: 768px)': {
+      padding: '1rem',
+    }
   },
   contentHeader: {
     color: '#2c3e50',
@@ -203,8 +279,9 @@ const styles = {
   audioPlayer: {
     width: '100%',
     marginTop: '1rem',
-    borderRadius: '8px',
-    backgroundColor: '#f1f3f5',
+    '@media (max-width: 768px)': {
+      width: '100%',
+    }
   },
 };
 

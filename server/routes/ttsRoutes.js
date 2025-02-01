@@ -26,6 +26,8 @@ const __dirname = path.dirname(__filename);
 const tempDir = path.join(__dirname, '../temp');
 const audioDir = path.join(__dirname, '../public/audio');
 
+const BASE_URL = process.env.BASE_URL || 'http://localhost:5000';
+
 // Ensure directories exist on startup
 (async () => {
   try {
@@ -250,31 +252,105 @@ async function generateTTS(text, voice = 'alloy', model = 'tts-1') {
   }
 }
 
-// New helper function to merge audio buffers
+// Update the mergeAudioBuffers function
 async function mergeAudioBuffers(urls) {
   // Download all files to temp directory
   const tempFiles = await Promise.all(urls.map(async (url, index) => {
-    const response = await fetch(url);
-    const buffer = await response.arrayBuffer();
-    const tempFile = path.join(tempDir, `temp-${index}-${Date.now()}.mp3`);
-    await fs.promises.writeFile(tempFile, Buffer.from(buffer));
-    return tempFile;
+    // Convert relative URLs to absolute URLs
+    const absoluteUrl = url.startsWith('http') ? url : `${BASE_URL}${url}`;
+    
+    try {
+      const response = await fetch(absoluteUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch audio file: ${response.statusText}`);
+      }
+      
+      const buffer = await response.arrayBuffer();
+      const tempFile = path.join(tempDir, `temp-${index}-${Date.now()}.mp3`);
+      await fs.promises.writeFile(tempFile, Buffer.from(buffer));
+      return tempFile;
+    } catch (error) {
+      console.error(`Error processing audio file ${url}:`, error);
+      throw error;
+    }
   }));
 
   // Merge files
   const outputPath = path.join(tempDir, `merged-${Date.now()}.mp3`);
-  await mergeAudioFiles(tempFiles, outputPath);
   
-  // Read merged file
-  const mergedBuffer = await fs.promises.readFile(outputPath);
-  
-  // Clean up temp files
-  await Promise.all([
-    ...tempFiles.map(file => fs.promises.unlink(file)),
-    fs.promises.unlink(outputPath)
-  ]);
+  try {
+    await mergeAudioFiles(tempFiles, outputPath);
+    
+    // Read merged file
+    const mergedBuffer = await fs.promises.readFile(outputPath);
+    
+    // Clean up temp files
+    await Promise.all([
+      ...tempFiles.map(file => fs.promises.unlink(file).catch(console.error)),
+      fs.promises.unlink(outputPath).catch(console.error)
+    ]);
 
-  return mergedBuffer;
+    return mergedBuffer;
+  } catch (error) {
+    // Clean up temp files even if merge fails
+    await Promise.all(tempFiles.map(file => 
+      fs.promises.unlink(file).catch(console.error)
+    ));
+    throw error;
+  }
+}
+
+// Alternative approach: Instead of using fetch, read directly from GridFS
+async function mergeAudioBuffers(urls) {
+  // Download all files to temp directory
+  const tempFiles = await Promise.all(urls.map(async (url, index) => {
+    try {
+      // Extract ID from URL
+      const fileId = url.split('/').pop();
+      const objectId = new ObjectId(fileId);
+      
+      // Create a temporary file path
+      const tempFile = path.join(tempDir, `temp-${index}-${Date.now()}.mp3`);
+      
+      // Create write stream
+      const writeStream = fs.createWriteStream(tempFile);
+      
+      // Get file from GridFS and pipe to temp file
+      const downloadStream = gridFSBucket.openDownloadStream(objectId);
+      await new Promise((resolve, reject) => {
+        downloadStream
+          .pipe(writeStream)
+          .on('error', reject)
+          .on('finish', resolve);
+      });
+
+      return tempFile;
+    } catch (error) {
+      console.error(`Error processing audio file ${url}:`, error);
+      throw error;
+    }
+  }));
+
+  // Rest of the function remains the same...
+  const outputPath = path.join(tempDir, `merged-${Date.now()}.mp3`);
+  try {
+    await mergeAudioFiles(tempFiles, outputPath);
+    const mergedBuffer = await fs.promises.readFile(outputPath);
+    
+    // Clean up
+    await Promise.all([
+      ...tempFiles.map(file => fs.promises.unlink(file).catch(console.error)),
+      fs.promises.unlink(outputPath).catch(console.error)
+    ]);
+
+    return mergedBuffer;
+  } catch (error) {
+    // Clean up on error
+    await Promise.all(tempFiles.map(file => 
+      fs.promises.unlink(file).catch(console.error)
+    ));
+    throw error;
+  }
 }
 
 router.post('/generate-audio', async (req, res) => {
