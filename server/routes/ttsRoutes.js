@@ -256,54 +256,6 @@ async function generateTTS(text, voice = 'alloy', model = 'tts-1') {
 async function mergeAudioBuffers(urls) {
   // Download all files to temp directory
   const tempFiles = await Promise.all(urls.map(async (url, index) => {
-    // Convert relative URLs to absolute URLs
-    const absoluteUrl = url.startsWith('http') ? url : `${BASE_URL}${url}`;
-    
-    try {
-      const response = await fetch(absoluteUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch audio file: ${response.statusText}`);
-      }
-      
-      const buffer = await response.arrayBuffer();
-      const tempFile = path.join(tempDir, `temp-${index}-${Date.now()}.mp3`);
-      await fs.promises.writeFile(tempFile, Buffer.from(buffer));
-      return tempFile;
-    } catch (error) {
-      console.error(`Error processing audio file ${url}:`, error);
-      throw error;
-    }
-  }));
-
-  // Merge files
-  const outputPath = path.join(tempDir, `merged-${Date.now()}.mp3`);
-  
-  try {
-    await mergeAudioFiles(tempFiles, outputPath);
-    
-    // Read merged file
-    const mergedBuffer = await fs.promises.readFile(outputPath);
-    
-    // Clean up temp files
-    await Promise.all([
-      ...tempFiles.map(file => fs.promises.unlink(file).catch(console.error)),
-      fs.promises.unlink(outputPath).catch(console.error)
-    ]);
-
-    return mergedBuffer;
-  } catch (error) {
-    // Clean up temp files even if merge fails
-    await Promise.all(tempFiles.map(file => 
-      fs.promises.unlink(file).catch(console.error)
-    ));
-    throw error;
-  }
-}
-
-// Alternative approach: Instead of using fetch, read directly from GridFS
-async function mergeAudioBuffers(urls) {
-  // Download all files to temp directory
-  const tempFiles = await Promise.all(urls.map(async (url, index) => {
     try {
       // Extract ID from URL
       const fileId = url.split('/').pop();
@@ -331,7 +283,7 @@ async function mergeAudioBuffers(urls) {
     }
   }));
 
-  // Rest of the function remains the same...
+  // Merge files
   const outputPath = path.join(tempDir, `merged-${Date.now()}.mp3`);
   try {
     await mergeAudioFiles(tempFiles, outputPath);
