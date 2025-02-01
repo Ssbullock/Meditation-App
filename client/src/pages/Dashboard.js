@@ -4,7 +4,6 @@ import api from '../utils/api';
 import { Link } from 'react-router-dom';
 import '../styles/Dashboard.css';
 import '../styles/responsive.css';
-import { ObjectId } from 'mongodb';
 
 function Dashboard() {
   const [selectedTab, setSelectedTab] = useState('meditations');
