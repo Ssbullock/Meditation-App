@@ -1,9 +1,10 @@
 // client/src/pages/Dashboard.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import api from '../utils/api';
 import { Link } from 'react-router-dom';
 import '../styles/Dashboard.css';
 import '../styles/responsive.css';
+import { useAuth } from '../context/AuthContext';
 
 function Dashboard() {
   const [selectedTab, setSelectedTab] = useState('meditations');
@@ -14,9 +15,26 @@ function Dashboard() {
   // For songs
   const [musicFiles, setMusicFiles] = useState([]);
 
+  const { user, logout } = useAuth();
+  const [showDropdown, setShowDropdown] = useState(false);
+  const dropdownRef = useRef(null);
+
   useEffect(() => {
     fetchMeditations();
     fetchMusicFiles();
+  }, []);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setShowDropdown(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
   }, []);
 
   const fetchMeditations = async () => {
@@ -121,26 +139,74 @@ function Dashboard() {
     }
   }, []);
 
+  const handleLogout = async () => {
+    try {
+      await logout();
+      // Redirect to login page or handle logout
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
+  };
+
   return (
     <div className="mobile-stack" style={styles.container}>
       <div className="mobile-full-width" style={styles.sidebar}>
-        <button
-          className={`tab-button ${selectedTab === 'meditations' ? 'active' : ''}`}
-          onClick={() => handleTabClick('meditations')}
-        >
-          Meditations
-        </button>
-        <button
-          className={`tab-button ${selectedTab === 'songs' ? 'active' : ''}`}
-          onClick={() => handleTabClick('songs')}
-        >
-          Songs
-        </button>
-        <Link to="/create" style={{ textDecoration: 'none' }}>
-          <button className="create-button mobile-full-width">
-            Create New
+        <div style={styles.sidebarContent}>
+          <button
+            className={`tab-button ${selectedTab === 'meditations' ? 'active' : ''}`}
+            onClick={() => handleTabClick('meditations')}
+          >
+            Meditations
           </button>
-        </Link>
+          <button
+            className={`tab-button ${selectedTab === 'songs' ? 'active' : ''}`}
+            onClick={() => handleTabClick('songs')}
+          >
+            Songs
+          </button>
+          <Link to="/create" style={{ textDecoration: 'none' }}>
+            <button className="create-button mobile-full-width">
+              Create New
+            </button>
+          </Link>
+        </div>
+
+        <div style={styles.profileSection} ref={dropdownRef}>
+          <button 
+            style={styles.profileButton}
+            onClick={() => setShowDropdown(!showDropdown)}
+          >
+            {user?.photoURL ? (
+              <img 
+                src={user.photoURL} 
+                alt="Profile" 
+                style={styles.profileImage}
+              />
+            ) : (
+              <div style={styles.profileInitial}>
+                {user?.displayName?.[0] || user?.email?.[0] || '?'}
+              </div>
+            )}
+            <span style={styles.profileName} className="mobile-hide">
+              {user?.displayName || user?.email}
+            </span>
+          </button>
+
+          {showDropdown && (
+            <div style={styles.dropdown}>
+              <div style={styles.dropdownHeader}>
+                <strong>{user?.displayName}</strong>
+                <div style={styles.dropdownEmail}>{user?.email}</div>
+              </div>
+              <button 
+                onClick={handleLogout}
+                style={styles.dropdownButton}
+              >
+                Logout
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="mobile-padding" style={styles.content}>
@@ -280,6 +346,107 @@ const styles = {
     marginTop: '1rem',
     '@media (max-width: 768px)': {
       width: '100%',
+    }
+  },
+  sidebarContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '1rem',
+    flex: 1,
+    '@media (max-width: 768px)': {
+      flexDirection: 'row',
+      alignItems: 'center',
+    }
+  },
+  profileSection: {
+    position: 'relative',
+    marginTop: 'auto',
+    '@media (max-width: 768px)': {
+      marginTop: 0,
+      marginLeft: '1rem',
+    }
+  },
+  profileButton: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    padding: '0.5rem',
+    border: 'none',
+    borderRadius: '8px',
+    background: 'transparent',
+    cursor: 'pointer',
+    transition: 'background-color 0.2s',
+    width: '100%',
+    '&:hover': {
+      backgroundColor: 'rgba(0, 0, 0, 0.05)',
+    }
+  },
+  profileImage: {
+    width: '32px',
+    height: '32px',
+    borderRadius: '50%',
+    objectFit: 'cover',
+  },
+  profileInitial: {
+    width: '32px',
+    height: '32px',
+    borderRadius: '50%',
+    backgroundColor: '#667eea',
+    color: 'white',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '1rem',
+    fontWeight: '500',
+  },
+  profileName: {
+    color: '#2c3e50',
+    fontSize: '0.9rem',
+    fontWeight: '500',
+    maxWidth: '150px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  dropdown: {
+    position: 'absolute',
+    top: '100%',
+    right: 0,
+    marginTop: '0.5rem',
+    backgroundColor: 'white',
+    borderRadius: '8px',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+    padding: '0.5rem',
+    minWidth: '200px',
+    zIndex: 1000,
+    '@media (max-width: 768px)': {
+      right: 'auto',
+      left: '0',
+    }
+  },
+  dropdownHeader: {
+    padding: '0.5rem',
+    borderBottom: '1px solid #e9ecef',
+    marginBottom: '0.5rem',
+  },
+  dropdownEmail: {
+    fontSize: '0.8rem',
+    color: '#6c757d',
+    marginTop: '0.25rem',
+    wordBreak: 'break-all',
+  },
+  dropdownButton: {
+    width: '100%',
+    padding: '0.5rem',
+    border: 'none',
+    borderRadius: '4px',
+    backgroundColor: 'transparent',
+    textAlign: 'left',
+    cursor: 'pointer',
+    color: '#dc3545',
+    transition: 'background-color 0.2s',
+    '&:hover': {
+      backgroundColor: 'rgba(220, 53, 69, 0.1)',
     }
   },
 };
