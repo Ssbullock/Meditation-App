@@ -175,6 +175,47 @@ async function uploadToGridFS(buffer, filename) {
   }
 }
 
+// Add this function before mergeAudioBuffers
+async function mergeAudioFiles(files, outputPath) {
+  return new Promise((resolve, reject) => {
+    const command = ffmpeg();
+    
+    // Add input files
+    files.forEach(file => {
+      command.input(file);
+    });
+
+    // Configure the merge
+    command
+      .on('error', (err) => {
+        console.error('Error merging audio files:', err);
+        reject(err);
+      })
+      .on('end', () => {
+        console.log('Audio merge completed');
+        resolve();
+      })
+      // Use the concat filter to merge audio files
+      .complexFilter([
+        {
+          filter: 'concat',
+          options: {
+            n: files.length, // number of input files
+            v: '0',         // no video
+            a: '1'          // audio only
+          }
+        }
+      ])
+      // Set output options
+      .outputOptions([
+        '-acodec', 'libmp3lame',  // use MP3 codec
+        '-ab', '128k',            // audio bitrate
+        '-ar', '44100'            // sample rate
+      ])
+      .save(outputPath);          // save to output file
+  });
+}
+
 // Modify the generateTTS function to use GridFS
 async function generateTTS(text, voice = 'alloy', model = 'tts-1') {
   try {
