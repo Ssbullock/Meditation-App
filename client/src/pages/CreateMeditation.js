@@ -485,7 +485,21 @@ function CreateMeditation() {
         {ttsAudioUrl && !mergedAudioUrl && (
           <div style={styles.section}>
             <h3 style={styles.sectionTitle}>Preview TTS Audio</h3>
-            <audio ref={ttsRef} controls src={`${process.env.REACT_APP_API_URL}${ttsAudioUrl}`} onError={handleAudioError} />
+            <div style={styles.audioPlayer}>
+              <h4>Generated Speech</h4>
+              <audio
+                ref={ttsRef}
+                controls
+                src={`${process.env.REACT_APP_API_URL}/api/tts${ttsAudioUrl}`}
+                onError={(e) => {
+                  console.error('TTS Audio playback error:', e);
+                  // Retry loading with full URL if relative URL fails
+                  if (!e.target.src.startsWith('http')) {
+                    e.target.src = `${process.env.REACT_APP_API_URL}/api/tts${ttsAudioUrl}`;
+                  }
+                }}
+              />
+            </div>
             <label style={styles.sectionTitle}>TTS Volume</label>
             <input
               type="range"
@@ -552,7 +566,21 @@ function CreateMeditation() {
                 marginTop: '2rem',
               }}>
                 <h4 style={styles.sectionTitle}>Music Preview</h4>
-                <audio ref={musicRef} controls src={`${process.env.REACT_APP_API_URL}${selectedMusic}`} onError={handleAudioError} />
+                <div style={styles.audioPlayer}>
+                  <h4>Selected Music</h4>
+                  <audio
+                    ref={musicRef}
+                    controls
+                    src={`${process.env.REACT_APP_API_URL}${selectedMusic}`}
+                    onError={(e) => {
+                      console.error('Music playback error:', e);
+                      // Retry loading with full URL if relative URL fails
+                      if (!e.target.src.startsWith('http')) {
+                        e.target.src = `${process.env.REACT_APP_API_URL}${selectedMusic}`;
+                      }
+                    }}
+                  />
+                </div>
                 <label style={styles.sectionTitle}>Music Volume</label>
                 <input
                   type="range"
@@ -596,7 +624,20 @@ function CreateMeditation() {
         {mergedAudioUrl && (
           <div style={styles.section}>
             <h3 style={styles.sectionTitle}>Final Merged Meditation Audio</h3>
-            <audio controls src={`${process.env.REACT_APP_API_URL}${mergedAudioUrl}`} onError={handleAudioError} />
+            <div style={styles.audioPlayer}>
+              <h4>Final Mixed Audio</h4>
+              <audio
+                controls
+                src={`${process.env.REACT_APP_API_URL}/api/tts${mergedAudioUrl}`}
+                onError={(e) => {
+                  console.error('Merged Audio playback error:', e);
+                  // Retry loading with full URL if relative URL fails
+                  if (!e.target.src.startsWith('http')) {
+                    e.target.src = `${process.env.REACT_APP_API_URL}/api/tts${mergedAudioUrl}`;
+                  }
+                }}
+              />
+            </div>
           </div>
         )}
 

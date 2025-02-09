@@ -241,7 +241,7 @@ function Dashboard() {
                 {med.audioUrl && (
                   <audio
                     controls
-                    src={`${process.env.REACT_APP_API_URL}${med.audioUrl}`}
+                    src={`${process.env.REACT_APP_API_URL}/api/tts${med.audioUrl}`}
                     style={styles.audioPlayer}
                     preload="none"
                     className="mobile-full-width"
